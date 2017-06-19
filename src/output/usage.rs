@@ -4,8 +4,7 @@ use std::collections::{BTreeMap, VecDeque};
 // Internal
 use INTERNAL_ERROR_MSG;
 use parsing::{AnyArg, ArgMatcher};
-use built::Pos;
-use ArgSettings;
+use {Arg, ArgSettings};
 use AppSettings as AS;
 use parsing::Parser;
 
@@ -30,9 +29,9 @@ pub fn create_error_usage<'a, 'b>(
         .iter()
         .filter(|n| {
             if let Some(o) = find_by_name!(p, **n, opts, iter) {
-                !o.b.is_set(ArgSettings::Required) && !o.b.is_set(ArgSettings::Hidden)
+                !o.is_set(ArgSettings::Required) && !o.is_set(ArgSettings::Hidden)
             } else if let Some(p) = find_by_name!(p, **n, positionals, values) {
-                !p.b.is_set(ArgSettings::Required) && p.b.is_set(ArgSettings::Hidden)
+                !p.is_set(ArgSettings::Required) && p.is_set(ArgSettings::Hidden)
             } else {
                 true // flags can't be required, so they're always true
             }
@@ -103,7 +102,7 @@ pub fn create_help_usage(p: &Parser, incl_reqs: bool) -> String {
     {
         usage.push_str(" [--]");
     }
-    let not_req_or_hidden = |p: &Pos| {
+    let not_req_or_hidden = |p: &Arg| {
         (!p.is_set(ArgSettings::Required) || p.is_set(ArgSettings::Last)) &&
             !p.is_set(ArgSettings::Hidden)
     };
@@ -116,7 +115,7 @@ pub fn create_help_usage(p: &Parser, incl_reqs: bool) -> String {
         if has_last && incl_reqs {
             let pos = p.positionals
                 .values()
-                .find(|p| p.b.is_set(ArgSettings::Last))
+                .find(|p| p.is_set(ArgSettings::Last))
                 .expect(INTERNAL_ERROR_MSG);
             debugln!("usage::create_help_usage: '{}' has .last(true)", pos.name());
             let req = pos.is_set(ArgSettings::Required);
@@ -200,10 +199,10 @@ fn get_args_tag(p: &Parser, incl_reqs: bool) -> Option<String> {
         .filter(|pos| !pos.is_set(ArgSettings::Hidden))
         .filter(|pos| !pos.is_set(ArgSettings::Last))
     {
-        debugln!("usage::get_args_tag:iter:{}:", pos.b.name);
-        if let Some(g_vec) = p.groups_for_arg(pos.b.name) {
+        debugln!("usage::get_args_tag:iter:{}:", pos.name);
+        if let Some(g_vec) = p.groups_for_arg(pos.name) {
             for grp_s in &g_vec {
-                debugln!("usage::get_args_tag:iter:{}:iter:{};", pos.b.name, grp_s);
+                debugln!("usage::get_args_tag:iter:{}:iter:{};", pos.name, grp_s);
                 // if it's part of a required group we don't want to count it
                 if p.groups.iter().any(|g| g.required && (&g.name == grp_s)) {
                     continue 'outer;
@@ -255,7 +254,7 @@ fn get_args_tag(p: &Parser, incl_reqs: bool) -> Option<String> {
         let highest_req_pos = p.positionals
             .iter()
             .filter_map(|(idx, pos)| {
-                if pos.b.is_set(ArgSettings::Required) && !pos.b.is_set(ArgSettings::Last) {
+                if pos.is_set(ArgSettings::Required) && !pos.is_set(ArgSettings::Last) {
                     Some(idx)
                 } else {
                     None
@@ -288,14 +287,14 @@ fn get_args_tag(p: &Parser, incl_reqs: bool) -> Option<String> {
 fn needs_flags_tag(p: &Parser) -> bool {
     debugln!("usage::needs_flags_tag;");
     'outer: for f in &p.flags {
-        debugln!("usage::needs_flags_tag:iter: f={};", f.b.name);
-        if let Some(l) = f.s.long {
+        debugln!("usage::needs_flags_tag:iter: f={};", f.name);
+        if let Some(l) = f.long {
             if l == "help" || l == "version" {
                 // Don't print `[FLAGS]` just for help or version
                 continue;
             }
         }
-        if let Some(g_vec) = p.groups_for_arg(f.b.name) {
+        if let Some(g_vec) = p.groups_for_arg(f.name) {
             for grp_s in &g_vec {
                 debugln!("usage::needs_flags_tag:iter:iter: grp_s={};", grp_s);
                 if p.groups.iter().any(|g| &g.name == grp_s && g.required) {
@@ -348,9 +347,9 @@ pub fn get_required_usage_from<'a, 'b>(
         }};
         ($a:ident, $what:ident, $how:ident, $v:ident, $p:ident) => {{
             if let Some(rl) = p.$what.$how()
-                                        .filter(|a| a.b.requires.is_some())
-                                        .find(|arg| &arg.b.name == $a)
-                                        .map(|a| a.b.requires.as_ref().unwrap()) {
+                                        .filter(|a| a.requires.is_some())
+                                        .find(|arg| &arg.name == $a)
+                                        .map(|a| a.requires.as_ref().unwrap()) {
                 for &(_, r) in rl.iter() {
                     if !$p.contains(&r) {
                         debugln!("usage::get_required_usage_from:iter:{}: adding arg req={:?}",
@@ -416,22 +415,22 @@ pub fn get_required_usage_from<'a, 'b>(
     let pmap = if let Some(m) = matcher {
         desc_reqs
             .iter()
-            .filter(|a| p.positionals.values().any(|p| &&p.b.name == a))
+            .filter(|a| p.positionals.values().any(|p| &&p.name == a))
             .filter(|&pos| !m.contains(pos))
-            .filter_map(|pos| p.positionals.values().find(|x| &x.b.name == pos))
+            .filter_map(|pos| p.positionals.values().find(|x| &x.name == pos))
             .filter(|&pos| incl_last || !pos.is_set(ArgSettings::Last))
-            .filter(|pos| !args_in_groups.contains(&pos.b.name))
+            .filter(|pos| !args_in_groups.contains(&pos.name))
             .map(|pos| (pos.index, pos))
-            .collect::<BTreeMap<u64, &Pos>>() // sort by index
+            .collect::<BTreeMap<u64, &Arg>>() // sort by index
     } else {
         desc_reqs
             .iter()
-            .filter(|a| p.positionals.values().any(|pos| &&pos.b.name == a))
-            .filter_map(|pos| p.positionals.values().find(|x| &x.b.name == pos))
+            .filter(|a| p.positionals.values().any(|pos| &&pos.name == a))
+            .filter_map(|pos| p.positionals.values().find(|x| &x.name == pos))
             .filter(|&pos| incl_last || !pos.is_set(ArgSettings::Last))
-            .filter(|pos| !args_in_groups.contains(&pos.b.name))
+            .filter(|pos| !args_in_groups.contains(&pos.name))
             .map(|pos| (pos.index, pos))
-            .collect::<BTreeMap<u64, &Pos>>() // sort by index
+            .collect::<BTreeMap<u64, &Arg>>() // sort by index
     };
     debugln!(
         "usage::get_required_usage_from: args_in_groups={:?}",
@@ -445,7 +444,7 @@ pub fn get_required_usage_from<'a, 'b>(
     }
     for a in desc_reqs
         .iter()
-        .filter(|name| !p.positionals.values().any(|p| &&p.b.name == name))
+        .filter(|name| !p.positionals.values().any(|p| &&p.name == name))
         .filter(|name| !p.groups.iter().any(|g| &&g.name == name))
         .filter(|name| !args_in_groups.contains(name))
         .filter(|name| {

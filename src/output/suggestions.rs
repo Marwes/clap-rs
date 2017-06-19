@@ -68,8 +68,8 @@ where
                     .p
                     .flags
                     .iter()
-                    .filter_map(|f| f.s.long)
-                    .chain(subcommand.p.opts.iter().filter_map(|o| o.s.long));
+                    .filter_map(|f| f.long)
+                    .chain(subcommand.p.opts.iter().filter_map(|o| o.long));
 
                 if let Some(candidate) = did_you_mean(arg, opts) {
                     let suffix = format!(

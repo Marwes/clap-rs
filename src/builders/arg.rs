@@ -1,20 +1,27 @@
-#[cfg(feature = "yaml")]
-use std::collections::BTreeMap;
+use std::borrow::Cow;
+use std::iter::Chain;
+use std::fmt::{self, Formatter, Display};
+use std::result::Result as StdResult;
 use std::rc::Rc;
 use std::ffi::{OsString, OsStr};
 #[cfg(target_os = "windows")]
 use osstringext::OsStrExt3;
 #[cfg(not(target_os = "windows"))]
 use std::os::unix::ffi::OsStrExt;
+// TODO-v3-beta: remove
+#[cfg(feature = "yaml")]
+use std::collections::BTreeMap;
 
+use vec_map::{self, VecMap};
+// TODO-v3-beta: remove
 #[cfg(feature = "yaml")]
 use yaml_rust::Yaml;
-use vec_map::VecMap;
 
+use INTERNAL_ERROR_MSG;
 use ArgSettings;
 use builders::arg_settings::ArgFlags;
 use builders::UsageParser;
-use built::{Base, Valued, Switched};
+use parsing::{AnyArg, DispOrder};
 
 // Gives the default display order value
 #[doc(hidden)]
@@ -51,37 +58,64 @@ pub struct Arg<'a, 'b>
 where
     'a: 'b,
 {
-    #[doc(hidden)] pub name: &'a str,
-    #[doc(hidden)] pub help: Option<&'b str>,
-    #[doc(hidden)] pub long_help: Option<&'b str>,
-    #[doc(hidden)] pub conflicts_with: Option<Vec<&'a str>>,
-    #[doc(hidden)] pub settings: Vec<ArgSettings>,
-    #[doc(hidden)] pub required_unless: Option<Vec<&'a str>>,
-    #[doc(hidden)] pub overrides_with: Option<Vec<&'a str>>,
-    #[doc(hidden)] pub groups: Option<Vec<&'a str>>,
-    #[doc(hidden)] pub requires: Option<Vec<(Option<&'b str>, &'a str)>>,
-    #[doc(hidden)] pub short: Option<char>,
-    #[doc(hidden)] pub index: Option<usize>,
-    #[doc(hidden)] pub long: Option<&'b str>,
-    #[doc(hidden)] pub aliases: Option<Vec<&'b str>>,
-    #[doc(hidden)] pub visible_aliases: Option<Vec<&'b str>>,
-    #[doc(hidden)] pub possible_values: Option<Vec<&'b str>>,
-    #[doc(hidden)] pub value_names: Option<VecMap<&'b str>>,
-    #[doc(hidden)] pub number_of_values: Option<u64>,
-    #[doc(hidden)] pub max_values: Option<u64>, 
-    #[doc(hidden)] pub min_values: Option<u64>,
-    #[doc(hidden)] pub value_delimiter: Option<char>,
-    #[doc(hidden)] pub default_value: Option<&'b OsStr>,
-    #[doc(hidden)] pub default_value_ifs: Option<VecMap<(&'a str, Option<&'b OsStr>, &'b OsStr)>>,
-    #[doc(hidden)] pub value_terminator: Option<&'b str>,
-    #[cfg_attr(feature = "serde", serde(default = "default_display_order"))] 
-    #[doc(hidden)] pub display_order: usize,
-    #[cfg_attr(feature = "serde", serde(skip))] 
-    #[doc(hidden)] pub validator: Option<Rc<Fn(String) -> Result<(), String>>>,
-    #[cfg_attr(feature = "serde", serde(skip))] 
-    #[doc(hidden)] pub validator_os: Option<Rc<Fn(&OsStr) -> Result<(), OsString>>>,
+    #[doc(hidden)]
+    pub name: &'a str,
+    #[doc(hidden)]
+    pub help: Option<&'b str>,
+    #[doc(hidden)]
+    pub long_help: Option<&'b str>,
+    #[doc(hidden)]
+    pub conflicts_with: Option<Vec<&'a str>>,
+    #[doc(hidden)]
+    pub settings: Vec<ArgSettings>,
+    #[doc(hidden)]
+    pub required_unless: Option<Vec<&'a str>>,
+    #[doc(hidden)]
+    pub overrides_with: Option<Vec<&'a str>>,
+    #[doc(hidden)]
+    pub groups: Option<Vec<&'a str>>,
+    #[doc(hidden)]
+    pub requires: Option<Vec<(Option<&'b str>, &'a str)>>,
+    #[doc(hidden)]
+    pub short: Option<char>,
+    #[doc(hidden)]
+    pub index: Option<usize>,
+    #[doc(hidden)]
+    pub long: Option<&'b str>,
+    #[doc(hidden)]
+    pub aliases: Option<Vec<&'b str>>,
+    #[doc(hidden)]
+    pub visible_aliases: Option<Vec<&'b str>>,
+    #[doc(hidden)]
+    pub possible_values: Option<Vec<&'b str>>,
+    #[doc(hidden)]
+    pub value_names: Option<VecMap<&'b str>>,
+    #[doc(hidden)]
+    pub number_of_values: Option<u64>,
+    #[doc(hidden)]
+    pub max_values: Option<u64>,
+    #[doc(hidden)]
+    pub min_values: Option<u64>,
+    #[doc(hidden)]
+    pub value_delimiter: Option<char>,
+    #[doc(hidden)]
+    pub default_value: Option<&'b OsStr>,
+    #[doc(hidden)]
+    pub default_value_ifs: Option<VecMap<(&'a str, Option<&'b OsStr>, &'b OsStr)>>,
+    #[doc(hidden)]
+    pub value_terminator: Option<&'b str>,
+    #[cfg_attr(feature = "serde", serde(default = "default_display_order"))]
+    #[doc(hidden)]
+    pub display_order: usize,
     #[cfg_attr(feature = "serde", serde(skip))]
-    #[doc(hidden)] pub _settings: ArgFlags,
+    #[doc(hidden)]
+    pub validator: Option<Rc<Fn(String) -> StdResult<(), String>>>,
+    #[cfg_attr(feature = "serde", serde(skip))]
+    #[doc(hidden)]
+    pub validator_os: Option<Rc<Fn(&OsStr) -> StdResult<(), OsString>>>,
+    #[cfg_attr(feature = "serde", serde(skip))]
+    #[doc(hidden)]
+    pub _settings: ArgFlags,
 }
 
 impl<'a, 'b> Arg<'a, 'b> {
@@ -1528,7 +1562,7 @@ impl<'a, 'b> Arg<'a, 'b> {
     /// [`Rc`]: https://doc.rust-lang.org/std/rc/struct.Rc.html
     pub fn validator<F>(mut self, f: F) -> Self
     where
-        F: Fn(String) -> Result<(), String> + 'static,
+        F: Fn(String) -> StdResult<(), String> + 'static,
     {
         self.validator = Some(Rc::new(f));
         self
@@ -1566,7 +1600,7 @@ impl<'a, 'b> Arg<'a, 'b> {
     /// [`Rc`]: https://doc.rust-lang.org/std/rc/struct.Rc.html
     pub fn validator_os<F>(mut self, f: F) -> Self
     where
-        F: Fn(&OsStr) -> Result<(), OsString> + 'static,
+        F: Fn(&OsStr) -> StdResult<(), OsString> + 'static,
     {
         self.validator_os = Some(Rc::new(f));
         self
@@ -2314,14 +2348,14 @@ impl<'a, 'b> Arg<'a, 'b> {
     #[deprecated(since = "2.24.1", note = "use Arg::set(ArgSettings::UseValueDelimiter) instead")]
     pub fn use_delimiter(mut self, d: bool) -> Self {
         if d {
-            if self.v.val_delim.is_none() {
-                self.v.val_delim = Some(',');
+            if self.val_delim.is_none() {
+                self.val_delim = Some(',');
             }
             self.setb(ArgSettings::TakesValue);
             self.setb(ArgSettings::UseValueDelimiter);
             self.unset(ArgSettings::ValueDelimiterNotSet)
         } else {
-            self.v.val_delim = None;
+            self.val_delim = None;
             self.unsetb(ArgSettings::UseValueDelimiter);
             self.unset(ArgSettings::ValueDelimiterNotSet)
         }
@@ -2428,12 +2462,7 @@ impl<'a, 'b> Arg<'a, 'b> {
 
     /// Deprecated
     #[deprecated(since = "2.24.1", note = "use Arg::new instead")]
-    pub fn with_name(n: &'a str) -> Self {
-        Arg {
-            b: Base::new(n),
-            ..Default::default()
-        }
-    }
+    pub fn with_name(n: &'a str) -> Self { Arg::new(n) }
 
     /// Deprecated
     #[deprecated(since = "2.24.1", note = "use Arg::from or serde instead")]
@@ -2484,22 +2513,6 @@ impl<'a, 'b> Arg<'a, 'b> {
             self.unset(ArgSettings::HideDefaultValue)
         }
     }
-}
-
-impl<'a, 'b, 'z> From<&'z Arg<'a, 'b>> for Arg<'a, 'b> {
-    fn from(a: &'z Arg<'a, 'b>) -> Self {
-        Arg {
-            b: a.b.clone(),
-            v: a.v.clone(),
-            s: a.s.clone(),
-            index: a.index,
-            r_ifs: a.r_ifs.clone(),
-        }
-    }
-}
-
-impl<'n, 'e> PartialEq for Arg<'n, 'e> {
-    fn eq(&self, other: &Arg<'n, 'e>) -> bool { self.b == other.b }
 }
 
 #[cfg(feature = "yaml")]
@@ -2729,7 +2742,9 @@ impl<'n, 'e> AnyArg<'n, 'e> for Arg<'n, 'e> {
         self.requires.as_ref().map(|o| &o[..])
     }
     fn conflicts(&self) -> Option<&[&'e str]> { self.conflicts.as_ref().map(|o| &o[..]) }
-    fn required_unless(&self) -> Option<&[&'e str]> { self.required_unless.as_ref().map(|o| &o[..]) }
+    fn required_unless(&self) -> Option<&[&'e str]> {
+        self.required_unless.as_ref().map(|o| &o[..])
+    }
     fn val_names(&self) -> Option<&VecMap<&'e str>> { self.value_names.as_ref() }
     fn _is_set(&self, s: ArgSettings) -> bool { self._settings.is_set(s) }
     fn _set(&mut self, s: ArgSettings) { self._settings.set(s) }
@@ -2753,19 +2768,21 @@ impl<'n, 'e> AnyArg<'n, 'e> for Arg<'n, 'e> {
     fn long_help(&self) -> Option<&'e str> { self.long_help }
     fn default_val(&self) -> Option<&'e OsStr> { self.default_value }
     fn default_vals_ifs(&self) -> Option<vec_map::Values<(&'n str, Option<&'e OsStr>, &'e OsStr)>> {
-        self.v.default_values_ifs.as_ref().map(|vm| vm.values())
+        self.default_values_ifs.as_ref().map(|vm| vm.values())
     }
     fn longest_filter(&self) -> bool { self._is_set(ArgSettings::TakesValue) && self.has_switch() }
-    fn aliases(&self) -> Option<Chain<&'e str>> { self.aliases.iter().chain(self.visible_aliases.iter()) }
+    fn aliases(&self) -> Option<Chain<&'e str, &'e str>> {
+        self.aliases.iter().chain(self.visible_aliases.iter())
+    }
 }
 
 
 impl<'n, 'e> Display for Arg<'n, 'e> {
-    fn fmt(&self, f: &mut Formatter) -> Result {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         if self._settings.is_set(ArgSettings::TakesValue) {
             if self.index.is_some() {
                 // Display for Positionals
-                if let Some(ref names) = self.v.val_names {
+                if let Some(ref names) = self.val_names {
                     try!(write!(
                         f,
                         "{}",
@@ -2776,30 +2793,30 @@ impl<'n, 'e> Display for Arg<'n, 'e> {
                             .join(" ")
                     ));
                 } else {
-                    try!(write!(f, "<{}>", self.b.name));
+                    try!(write!(f, "<{}>", self.name));
                 }
-                if self.b.settings.is_set(ArgSettings::Multiple) &&
-                    (self.v.val_names.is_none() || self.v.val_names.as_ref().unwrap().len() == 1)
+                if self.settings.is_set(ArgSettings::Multiple) &&
+                    (self.val_names.is_none() || self.val_names.as_ref().unwrap().len() == 1)
                 {
                     try!(write!(f, "..."));
                 }
             } else {
                 // Display for Opts
-                debugln!("Opt::fmt:{}", self.b.name);
-                let sep = if self.b.is_set(ArgSettings::RequireEquals) {
+                debugln!("Opt::fmt:{}", self.name);
+                let sep = if self.is_set(ArgSettings::RequireEquals) {
                     "="
                 } else {
                     " "
                 };
                 // Write the name such --long or -l
-                if let Some(l) = self.s.long {
+                if let Some(l) = self.long {
                     try!(write!(f, "--{}{}", l, sep));
                 } else {
-                    try!(write!(f, "-{}{}", self.s.short.unwrap(), sep));
+                    try!(write!(f, "-{}{}", self.short.unwrap(), sep));
                 }
 
                 // Write the values such as <name1> <name2>
-                if let Some(ref vec) = self.v.val_names {
+                if let Some(ref vec) = self.val_names {
                     let mut it = vec.iter().peekable();
                     while let Some((_, val)) = it.next() {
                         try!(write!(f, "<{}>", val));
@@ -2811,10 +2828,10 @@ impl<'n, 'e> Display for Arg<'n, 'e> {
                     if self.is_set(ArgSettings::Multiple) && num == 1 {
                         try!(write!(f, "..."));
                     }
-                } else if let Some(num) = self.v.num_vals {
+                } else if let Some(num) = self.num_vals {
                     let mut it = (0..num).peekable();
                     while let Some(_) = it.next() {
-                        try!(write!(f, "<{}>", self.b.name));
+                        try!(write!(f, "<{}>", self.name));
                         if it.peek().is_some() {
                             try!(write!(f, " "));
                         }
@@ -2826,7 +2843,7 @@ impl<'n, 'e> Display for Arg<'n, 'e> {
                     try!(write!(
                         f,
                         "<{}>{}",
-                        self.b.name,
+                        self.name,
                         if self.is_set(ArgSettings::Multiple) {
                             "..."
                         } else {
@@ -2837,10 +2854,10 @@ impl<'n, 'e> Display for Arg<'n, 'e> {
             }
         } else {
             // Display for Flags
-            if let Some(l) = self.s.long {
+            if let Some(l) = self.long {
                 try!(write!(f, "--{}", l));
             } else {
-                try!(write!(f, "-{}", self.s.short.unwrap()));
+                try!(write!(f, "-{}", self.short.unwrap()));
             }
         }
 
@@ -2893,7 +2910,7 @@ mod test {
     fn flag_display_multiple_aliases() {
         let mut f = Flag::new("flg");
         f.long = Some("fl");
-        f.visible_aliases = Some(vec![ "f2", "f3", "f4" ]);
+        f.visible_aliases = Some(vec!["f2", "f3", "f4"]);
         assert_eq!(&*format!("{}", f), "--fl");
     }
 
@@ -2943,7 +2960,7 @@ mod test {
     fn opt_display_multiple_aliases() {
         let mut o = Arg::new("opt");
         o.long = Some("option");
-        o.aliases = Some(vec![ "als2", "als3", "als4" ]);
+        o.aliases = Some(vec!["als2", "als3", "als4"]);
         assert_eq!(&*format!("{}", o), "--option <opt>");
     }
 

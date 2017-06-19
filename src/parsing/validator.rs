@@ -4,7 +4,7 @@ use std::fmt::Display;
 // Internal
 use INTERNAL_ERROR_MSG;
 use INVALID_UTF8;
-use ArgSettings;
+use {Arg, ArgSettings};
 use AppSettings as AS;
 use parsing::{AnyArg, ArgMatcher};
 use matched::MatchedArg;
@@ -35,15 +35,12 @@ impl<'a, 'b, 'z> Validator<'a, 'b, 'z> {
         try!(self.0.add_defaults(matcher));
         if let ParseResult::Opt(a) = needs_val_of {
             debugln!("Validator::validate: needs_val_of={:?}", a);
-            let o = self.0
-                .opts
-                .iter()
-                .find(|o| o.b.name == a)
+            let o = opts!(self).find(|o| o.name == a)
                 .expect(INTERNAL_ERROR_MSG);
             try!(self.validate_required(matcher));
             reqs_validated = true;
-            let should_err = if let Some(v) = matcher.0.args.get(&*o.b.name) {
-                v.vals.is_empty() && !(o.v.min_vals.is_some() && o.v.min_vals.unwrap() == 0)
+            let should_err = if let Some(v) = matcher.0.args.iter().find(|a| a.name == &*o.name) {
+                v.vals.is_empty() && !(o.min_values.is_some() && o.min_values.unwrap() == 0)
             } else {
                 true
             };
@@ -77,18 +74,16 @@ impl<'a, 'b, 'z> Validator<'a, 'b, 'z> {
         Ok(())
     }
 
-    fn validate_values<A>(
+    fn validate_values(
         &self,
-        arg: &A,
+        arg: &Arg,
         ma: &MatchedArg,
         matcher: &ArgMatcher<'a>,
     ) -> ClapResult<()>
-    where
-        A: AnyArg<'a, 'b> + Display,
     {
-        debugln!("Validator::validate_values: arg={:?}", arg.name());
+        debugln!("Validator::validate_values: arg={:?}", arg.name);
         for val in &ma.vals {
-            if self.0.is_set(AS::StrictUtf8) && val.to_str().is_none() {
+            if self.0._is_set(AS::StrictUtf8) && val.to_str().is_none() {
                 debugln!(
                     "Validator::validate_values: invalid UTF-8 found in val {:?}",
                     val
@@ -98,7 +93,7 @@ impl<'a, 'b, 'z> Validator<'a, 'b, 'z> {
                     self.0.color(),
                 ));
             }
-            if let Some(p_vals) = arg.possible_vals() {
+            if let Some(p_vals) = arg.possible_values {
                 debugln!("Validator::validate_values: possible_vals={:?}", p_vals);
                 let val_str = val.to_string_lossy();
                 if !p_vals.contains(&&*val_str) {

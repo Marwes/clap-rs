@@ -19,8 +19,6 @@ use INVALID_UTF8;
 use {ArgSettings, SubCommand, App, Arg, ArgGroup};
 use builders::app_settings::AppFlags;
 use AppSettings as AS;
-use built::{AppMeta, Base, Switched, Flag, Opt, Pos};
-use completions::{Shell, ComplGen};
 use output::Help;
 use output::errors::ErrorKind;
 use errors::Error as ClapError;
@@ -28,7 +26,7 @@ use Result as ClapResult;
 use output::fmt::ColorWhen;
 use output::usage;
 use output::suggestions;
-use parsing::{AnyArg, OsStrExt2, Validator, ArgMatcher};
+use parsing::{OsStrExt2, Validator, ArgMatcher};
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 #[doc(hidden)]
@@ -49,13 +47,10 @@ pub struct Parser<'a, 'b>
 where
     'a: 'b,
 {
-    pub app: Cow<'b, App<'a, 'b>>,
+    pub app: &'b mut App<'a, 'b>,
     settings: AppFlags,
     pub g_settings: AppFlags,
-    pub flags: Vec<Flag<'a, 'b>>,
-    pub opts: Vec<Opt<'a, 'b>>,
-    pub positionals: VecMap<Pos<'a, 'b>>,
-    groups: Vec<ArgGroup<'a>>,
+    pub positionals: VecMap<&'a str>,
     pub required: Vec<&'a str>,
     pub req_ifs: Vec<(&'a str, &'b str, &'a str)>,
     pub conflicts: Vec<&'b str>,
@@ -67,13 +62,10 @@ impl<'a, 'b> Parser<'a, 'b>
 where
     'a: 'b,
 {
-    fn new(app: Cow<'b, App>, appx_groups: usize, appx_args: usize) -> Self {
+    fn new(app: Cow<'b, App>, appx_groups: usize) -> Self {
         Parser {
             app: app,
-            flags: Vec::with_capacity(appx_args),
-            opts: Vec::with_capacity(appx_args),
-            positionals: Vec::with_capacity(appx_args),
-            flags: Vec::with_capacity(appx_args),
+            positionals: VecMap::new(),
             groups: Vec::with_capacity(appx_groups),
             ..Default::default()
         }
@@ -82,52 +74,27 @@ where
     // ----- Initialization Phase
     //
 
-    pub fn add_arg(&mut self, a: Arg<'a, 'b>) {
-        debug_assert!(self.debug_asserts(&a));
-        self.add_conditional_reqs(&a);
-        self.add_arg_groups(&a);
-        self.add_reqs(&a);
-        self.implied_settings(&a);
-        if a.index.is_some() || (a.short.is_none() && a.long.is_none()) {
-            let i = if a.index.is_none() {
-                (self.positionals.len() + 1)
-            } else {
-                a.index.unwrap() as usize
-            };
-            self.positionals.insert(i, Pos::from_arg(a, i as u64));
-        } else if a.is_set(ArgSettings::TakesValue) {
-            let mut ob = Opt::from(a);
-            ob.s.unified_ord = self.flags.len() + self.opts.len();
-            self.opts.push(ob);
-        } else {
-            let mut fb = Flag::from(a);
-            fb.s.unified_ord = self.flags.len() + self.opts.len();
-            self.flags.push(fb);
-        }
-    }
-
-    pub fn add_arg_ref(&mut self, a: &Arg<'a, 'b>) {
+    pub fn add_arg(&mut self, a: &mut Arg<'a, 'b>) {
         debug_assert!(self.debug_asserts(a));
         self.add_conditional_reqs(a);
         self.add_arg_groups(a);
         self.add_reqs(a);
         self.implied_settings(a);
+        if a.max_values.is_some() || a.min_values.is_some() ||
+            (a.number_of_values.is_some() && a.number_of_values.unwrap() > 1)
+        {
+            a.settings.push(ArgSettings::Multiple);
+        }
+        for s in a.settings {
+            a._settings.set(s);
+        }
         if a.index.is_some() || (a.short.is_none() && a.long.is_none()) {
             let i = if a.index.is_none() {
                 (self.positionals.len() + 1)
             } else {
                 a.index.unwrap() as usize
             };
-            let pb = Pos::from_arg_ref(a, i as u64);
-            self.positionals.insert(i, pb);
-        } else if a.is_set(ArgSettings::TakesValue) {
-            let mut ob = Opt::from(a);
-            ob.s.unified_ord = self.flags.len() + self.opts.len();
-            self.opts.push(ob);
-        } else {
-            let mut fb = Flag::from(a);
-            fb.s.unified_ord = self.flags.len() + self.opts.len();
-            self.flags.push(fb);
+            self.positionals.insert(i, a.name);
         }
     }
 
@@ -135,7 +102,7 @@ where
     fn add_conditional_reqs(&mut self, a: &Arg<'a, 'b>) {
         if let Some(ref req_ifs) = a.req_ifs {
             for &(arg, val) in req_ifs {
-                self.req_ifs.push((arg, val, a.b.name));
+                self.req_ifs.push((arg, val, a.name));
             }
         }
     }
@@ -144,7 +111,8 @@ where
     fn add_arg_groups(&mut self, a: &Arg<'a, 'b>) {
         if let Some(ref grps) = a.groups {
             for g in grps {
-                let mut ag = self.groups
+                let mut ag = self.app
+                    .groups
                     .entry(g)
                     .or_insert_with(|| ArgGroup::with_name(g));
                 ag.args.push(a.name);
@@ -156,7 +124,7 @@ where
     fn add_reqs(&mut self, a: &Arg<'a, 'b>) {
         if a.is_set(ArgSettings::Required) {
             // If the arg is required, add all it's requirements to master required list
-            if let Some(ref areqs) = a.b.requires {
+            if let Some(ref areqs) = a.requires {
                 for name in areqs.iter().filter(|&&(val, _)| val.is_none()).map(|&(
                     _,
                     name,
@@ -165,21 +133,11 @@ where
                     self.required.push(name);
                 }
             }
-            self.required.push(a.b.name);
+            self.required.push(a.name);
         }
     }
 
-    pub fn add_group(&mut self, group: ArgGroup<'a>) {
-        self.add_group_reqs(&group);
-        self.groups.push(group);
-    }
-
-    pub fn add_group_ref(&mut self, group: &ArgGroup<'a>) {
-        self.add_group_reqs(group);
-        self.groups.push(group.clone());
-    }
-
-    fn add_group_reqs(&mut self, group: &ArgGroup<'a>) {
+    pub fn add_group(&mut self, group: &ArgGroup<'a>) {
         if group.required {
             self.required.push(group.name);
             if let Some(ref reqs) = group.requires {
@@ -191,7 +149,6 @@ where
         }
     }
 
-
     //
     // ---------- Asserts
     //
@@ -199,19 +156,15 @@ where
     #[inline]
     fn app_debug_asserts(&mut self) -> bool {
         assert!(self.verify_positionals());
-        let should_err = self.groups.iter().all(|g| {
+        let should_err = self.app.groups.iter().all(|g| {
             g.args.iter().all(|arg| {
-                (self.flags.iter().any(|f| &f.b.name == arg) ||
-                     self.opts.iter().any(|o| &o.b.name == arg) ||
-                     self.positionals.values().any(|p| &p.b.name == arg) ||
-                     self.groups.iter().any(|g| &g.name == arg))
+                (args!(self).any(|a| &a.name == arg) ||
+                     self.app.groups.iter().any(|g| &g.name == arg))
             })
         });
         let g = self.groups.iter().find(|g| {
             g.args.iter().any(|arg| {
-                !(self.flags.iter().any(|f| &f.b.name == arg) ||
-                      self.opts.iter().any(|o| &o.b.name == arg) ||
-                      self.positionals.values().any(|p| &p.b.name == arg) ||
+                !(args!(self).any(|f| &f.name == arg) ||
                       self.groups.iter().any(|g| &g.name == arg))
             })
         });
@@ -223,10 +176,8 @@ where
                 .args
                 .iter()
                 .find(|arg| {
-                    !(self.flags.iter().any(|f| &&f.b.name == arg) ||
-                          self.opts.iter().any(|o| &&o.b.name == arg) ||
-                          self.positionals.values().any(|p| &&p.b.name == arg) ||
-                          self.groups.iter().any(|g| &&g.name == arg))
+                    !(args!(self).any(|f| &&f.name == arg) ||
+                          self.app.groups.iter().any(|g| &&g.name == arg))
                 })
                 .unwrap()
         );
@@ -236,17 +187,17 @@ where
     #[inline]
     fn debug_asserts(&self, a: &Arg) -> bool {
         assert!(
-            !arg_names!(self).any(|name| name == a.b.name),
-            format!("Non-unique argument name: {} is already in use", a.b.name)
+            !arg_names!(self).any(|name| name == a.name),
+            format!("Non-unique argument name: {} is already in use", a.name)
         );
-        if let Some(l) = a.s.long {
+        if let Some(l) = a.long {
             assert!(
                 !self.contains_long(l),
                 "Argument long must be unique\n\n\t--{} is already in use",
                 l
             );
         }
-        if let Some(s) = a.s.short {
+        if let Some(s) = a.short {
             assert!(
                 !self.contains_short(s),
                 "Argument short must be unique\n\n\t-{} is already in use",
@@ -263,30 +214,28 @@ where
             "Argument \"{}\" has the same index as another positional \
                     argument\n\n\tPerhaps try .multiple(true) to allow one positional argument \
                     to take multiple values",
-            a.b.name
+            a.name
         );
         assert!(
             !(a.is_set(ArgSettings::Required) && a.is_set(ArgSettings::Global)),
             "Global arguments cannot be required.\n\n\t'{}' is marked as \
                           global and required",
-            a.b.name
+            a.name
         );
-        if a.b.is_set(ArgSettings::Last) {
+        if a.is_set(ArgSettings::Last) {
             assert!(
-                !self.positionals
-                    .values()
-                    .any(|p| p.b.is_set(ArgSettings::Last)),
+                !positionals!(self).any(|a| a.is_set(ArgSettings::Last)),
                 "Only one positional argument may have last(true) set. Found two."
             );
             assert!(
-                a.s.long.is_none(),
+                a.long.is_none(),
                 "Flags or Options may not have last(true) set. {} has both a long and last(true) set.",
-                a.b.name
+                a.name
             );
             assert!(
-                a.s.short.is_none(),
+                a.short.is_none(),
                 "Flags or Options may not have last(true) set. {} has both a short and last(true) set.",
-                a.b.name
+                a.name
             );
         }
         true
@@ -300,30 +249,30 @@ where
         // Firt we verify that the index highest supplied index, is equal to the number of
         // positional arguments to verify there are no gaps (i.e. supplying an index of 1 and 3
         // but no 2)
-        if let Some((idx, p)) = self.positionals.iter().rev().next() {
+        if let Some((idx, p)) = positionals!(self).rev().next() {
             assert!(
                 !(idx != self.positionals.len()),
                 "Found positional argument \"{}\" whose index is {} but there \
                           are only {} positional arguments defined",
-                p.b.name,
+                p,
                 idx,
                 self.positionals.len()
             );
         }
 
         // Next we verify that only the highest index has a .multiple(true) (if any)
-        if self.positionals.values().any(|a| {
-            a.b.is_set(ArgSettings::Multiple) && (a.index as usize != self.positionals.len())
+        if positionals!(self).any(|a| {
+            a.is_set(ArgSettings::Multiple) && (a.index as usize != self.positionals.len())
         })
         {
-            let mut it = self.positionals.values().rev();
+            let mut it = positionals!(self).rev();
             let last = it.next().unwrap();
             let second_to_last = it.next().unwrap();
             // Either the final positional is required
             // Or the second to last has a terminator or .last(true) set
             let ok = last.is_set(ArgSettings::Required) ||
-                (second_to_last.v.terminator.is_some() ||
-                     second_to_last.b.is_set(ArgSettings::Last)) ||
+                (second_to_last.terminator.is_some() ||
+                     second_to_last.is_set(ArgSettings::Last)) ||
                 last.is_set(ArgSettings::Last);
             assert!(
                 ok,
@@ -338,10 +287,8 @@ where
                           argument may be set to .multiple(true)"
             );
 
-            let count = self.positionals
-                .values()
-                .filter(|p| {
-                    p.b.settings.is_set(ArgSettings::Multiple) && p.v.num_vals.is_none()
+            let count = positionals!(self).filter(|p| {
+                    p.settings.is_set(ArgSettings::Multiple) && p.num_vals.is_none()
                 })
                 .count();
             let ok = count <= 1 ||
@@ -360,17 +307,17 @@ where
             // index are also required.
             let mut found = false;
             let mut foundx2 = false;
-            for p in self.positionals.values().rev() {
-                if foundx2 && !p.b.settings.is_set(ArgSettings::Required) {
+            for p in positionals!(self).rev() {
+                if foundx2 && !p.settings.is_set(ArgSettings::Required) {
                     assert!(
-                        p.b.is_set(ArgSettings::Required),
+                        p.is_set(ArgSettings::Required),
                         "Found positional argument which is not required with a lower \
                                   index than a required positional argument by two or more: {:?} \
                                   index {}",
-                        p.b.name,
+                        p.name,
                         p.index
                     );
-                } else if p.b.is_set(ArgSettings::Required) && !p.b.is_set(ArgSettings::Last) {
+                } else if p.is_set(ArgSettings::Required) && !p.is_set(ArgSettings::Last) {
                     // Args that .last(true) don't count since they can be required and have
                     // positionals with a lower index that aren't required
                     // Imagine: prog <req1> [opt1] -- <req2>
@@ -391,16 +338,16 @@ where
             // Check that if a required positional argument is found, all positions with a lower
             // index are also required
             let mut found = false;
-            for p in self.positionals.values().rev() {
+            for p in positionals!(self).rev() {
                 if found {
                     assert!(
-                        p.b.is_set(ArgSettings::Required),
+                        p.is_set(ArgSettings::Required),
                         "Found positional argument which is not required with a lower \
                                   index than a required positional argument: {:?} index {}",
-                        p.b.name,
+                        p.name,
                         p.index
                     );
-                } else if p.b.is_set(ArgSettings::Required) && !p.b.is_set(ArgSettings::Last) {
+                } else if p.is_set(ArgSettings::Required) && !p.is_set(ArgSettings::Last) {
                     // Args that .last(true) don't count since they can be required and have
                     // positionals with a lower index that aren't required
                     // Imagine: prog <req1> [opt1] -- <req2>
@@ -412,8 +359,8 @@ where
                 }
             }
         }
-        if self.positionals.values().any(|p| {
-            p.b.is_set(ArgSettings::Last) && p.b.is_set(ArgSettings::Required)
+        if positionals!(self).any(|p| {
+            p.is_set(ArgSettings::Last) && p.is_set(ArgSettings::Required)
         }) && self.has_subcommands() && !self.is_set(AS::SubcommandsNegateReqs)
         {
             panic!(
@@ -450,36 +397,33 @@ where
     pub fn derive_display_order(&mut self) {
         if self.is_set(AS::DeriveDisplayOrder) {
             let unified = self.is_set(AS::UnifiedHelpMessage);
-            for (i, o) in self.opts
-                .iter_mut()
+            for (i, a) in args_mut!(self)
                 .enumerate()
-                .filter(|&(_, ref o)| o.s.disp_ord == 999)
+                .filter(|&(_, ref a)| a.disp_ord == 999)
             {
-                o.s.disp_ord = if unified { o.s.unified_ord } else { i };
+                a.disp_ord = if unified { a.unified_ord } else { i };
             }
-            for (i, f) in self.flags
-                .iter_mut()
-                .enumerate()
-                .filter(|&(_, ref f)| f.s.disp_ord == 999)
-            {
-                f.s.disp_ord = if unified { f.s.unified_ord } else { i };
-            }
-            for (i, sc) in &mut self.subcommands.iter_mut().enumerate().filter(
+            for (i, sc) in &mut self.app.subcommands.iter_mut().enumerate().filter(
                 |&(_, ref sc)| {
-                    sc.p.meta.disp_ord == 999
+                    sc.p.app.disp_ord == 999
                 },
             )
             {
-                sc.p.meta.disp_ord = i;
+                sc.p.app.disp_ord = i;
             }
         }
-        for sc in &mut self.subcommands {
-            sc.p.derive_display_order();
-        }
+        // TODO-v3-alpha: display order for children shouldn't be derived unless we need to display
+        // it!
+        //
+        // for sc in &mut self.app.subcommands {
+        //     sc.p.derive_display_order();
+        // }
     }
 
+    // TODO-v3-alpha: This should only happen when we reach said subcommand with the exception of
+    // completions
     pub fn propagate_globals(&mut self) {
-        for sc in &mut self.subcommands {
+        for sc in &mut self.app.subcommands {
             // We have to create a new scope in order to tell rustc the borrow of `sc` is
             // done and to recursively call this method
             {
@@ -491,16 +435,21 @@ where
         }
     }
 
-    pub fn propagate_settings(&mut self) {
+    // TODO-v3-alpha: This should only propagate to a particular SC, not all
+    pub fn propagate_settings_to(&mut self, sc_name: &str) {
         debugln!(
             "Parser::propogate_settings: self={}, g_settings={:#?}",
-            self.meta.name,
+            self.app.name,
             self.g_settings
         );
-        for sc in &mut self.subcommands {
+        if let Some(sc) = self.app
+            .subcommands
+            .iter_mut()
+            .find(|sc| sc.name == sc_name)
+        {
             debugln!(
                 "Parser::propogate_settings: sc={}, settings={:#?}, g_settings={:#?}",
-                sc.p.meta.name,
+                sc.p.app.name,
                 sc.p.settings,
                 sc.p.g_settings
             );
@@ -513,84 +462,35 @@ where
                 if vsc {
                     sc.p.set(AS::DisableVersion);
                 }
-                if gv && sc.p.meta.version.is_none() && self.meta.version.is_some() {
+                if gv && sc.p.app.version.is_none() && self.app.version.is_some() {
                     sc.p.set(AS::GlobalVersion);
-                    sc.p.meta.version = Some(self.meta.version.unwrap());
+                    sc.p.app.version = Some(self.app.version.unwrap());
                 }
                 sc.p.settings = sc.p.settings | self.g_settings;
                 sc.p.g_settings = sc.p.g_settings | self.g_settings;
-                sc.p.meta.term_w = self.meta.term_w;
-                sc.p.meta.max_w = self.meta.max_w;
+                sc.p.app.term_w = self.app.term_w;
+                sc.p.app.max_w = self.app.max_w;
             }
-            sc.p.propogate_settings();
-        }
-    }
-
-    fn propagate_help_version(&mut self) {
-        debugln!("Parser::propogate_help_version;");
-        self.create_help_and_version();
-        for sc in &mut self.subcommands {
-            sc.p.propogate_help_version();
-        }
-    }
-
-    fn build_bin_names(&mut self) {
-        debugln!("Parser::build_bin_names;");
-        for sc in &mut self.subcommands {
-            debug!("Parser::build_bin_names:iter: bin_name set...");
-            if sc.p.meta.bin_name.is_none() {
-                sdebugln!("No");
-                let bin_name = format!(
-                    "{}{}{}",
-                    self.meta
-                        .bin_name
-                        .as_ref()
-                        .unwrap_or(&self.meta.name.clone()),
-                    if self.meta.bin_name.is_some() {
-                        " "
-                    } else {
-                        ""
-                    },
-                    &*sc.p.meta.name
-                );
-                debugln!(
-                    "Parser::build_bin_names:iter: Setting bin_name of {} to {}",
-                    self.meta.name,
-                    bin_name
-                );
-                sc.p.meta.bin_name = Some(bin_name);
-            } else {
-                sdebugln!("yes ({:?})", sc.p.meta.bin_name);
-            }
-            debugln!(
-                "Parser::build_bin_names:iter: Calling build_bin_names from...{}",
-                sc.p.meta.name
-            );
-            sc.p.build_bin_names();
+            // TODO-v3-alpha: This should only propagate to a particular SC, not all
+            // sc.p.propogate_settings();
         }
     }
 
     pub fn create_help_and_version(&mut self) {
         debugln!("Parser::create_help_and_version;");
+        // TODO-3x-beta: remove help and version generation because they should already be
+        // made. Consider just removing version if needed, and creating help subcommand if needed
+        //
         // name is "hclap_help" because flags are sorted by name
         if !self.contains_long("help") {
             debugln!("Parser::create_help_and_version: Building --help");
-            if self.help_short.is_none() && !self.contains_short('h') {
-                self.help_short = Some('h');
+            if self.app.help_short.is_none() && !self.contains_short('h') {
+                self.app.help_short = Some('h');
             }
-            let arg = Flag {
-                b: Base {
-                    name: "hclap_help",
-                    help: self.help_message.or(Some("Prints help information")),
-                    ..Default::default()
-                },
-                s: Switched {
-                    short: self.help_short,
-                    long: Some("help"),
-                    ..Default::default()
-                },
-            };
-            self.flags.push(arg);
+            let mut arg = Arg::new("hclap_help").long("help");
+            arg.help = self.app.help_message.or(Some("Prints help information"));
+            arg.short = self.app.help_short;
+            self.app.args.push(arg);
         }
         if !self.is_set(AS::DisableVersion) && !self.contains_long("version") {
             debugln!("Parser::create_help_and_version: Building --version");
@@ -598,25 +498,16 @@ where
                 self.version_short = Some('V');
             }
             // name is "vclap_version" because flags are sorted by name
-            let arg = Flag {
-                b: Base {
-                    name: "vclap_version",
-                    help: self.version_message.or(Some("Prints version information")),
-                    ..Default::default()
-                },
-                s: Switched {
-                    short: self.version_short,
-                    long: Some("version"),
-                    ..Default::default()
-                },
-            };
-            self.flags.push(arg);
+            let arg = Arg::new("vclap_version").long("version");
+            arg.help = self.version_message.or(Some("Prints version information"));
+            arg.short = self.app.version_short;
+            self.app.args.push(arg);
         }
-        if !self.subcommands.is_empty() && !self.is_set(AS::DisableHelpSubcommand) &&
+        if !self.app.subcommands.is_empty() && !self.is_set(AS::DisableHelpSubcommand) &&
             self.is_set(AS::NeedsSubcommandHelp)
         {
             debugln!("Parser::create_help_and_version: Building help");
-            self.subcommands
+            self.app.subcommands
                 .push(App::new("help")
                           .about("Prints this message or the help of the given subcommand(s)"));
         }
@@ -639,21 +530,19 @@ where
     {
         debugln!("Parser::get_matches_with;");
 
-        // TODO: do all propagations
-        // If there are global arguments, or settings we need to propgate them down to subcommands
-        // before parsing incase we run into a subcommand
-        self.propagate_globals();
+        // TODO-v3-alpha:
+        // globals should only be propagated on completions...consider moving this call
+        // self.propagate_globals();
+
         self.propagate_settings();
         self.derive_display_order();
 
         // Verify all positional assertions pass
         debug_assert!(self.app_debug_asserts());
-        if self.positionals.values().any(|a| {
-            a.b.is_set(ArgSettings::Multiple) && (a.index as usize != self.positionals.len())
+        if positionals!(self).any(|a| {
+            a.is_set(ArgSettings::Multiple) && (a.index as usize != self.positionals.len())
         }) &&
-            self.positionals
-                .values()
-                .last()
+            positionals!(self).last()
                 .map_or(false, |p| !p.is_set(ArgSettings::Last))
         {
             self.settings.set(AS::LowIndexMultiplePositional);
@@ -707,9 +596,7 @@ where
                 if !starts_new_arg {
                     if let ParseResult::Opt(name) = needs_val_of {
                         // Check to see if parsing a value from a previous arg
-                        let arg = self.opts
-                            .iter()
-                            .find(|o| o.b.name == name)
+                        let arg = opts!(self).find(|o| o.name == name)
                             .expect(INTERNAL_ERROR_MSG);
                         // get the Opt so we can check the settings
                         needs_val_of = try!(self.add_val_to_arg(arg, &arg_os, matcher));
@@ -769,7 +656,7 @@ where
                         return Err(ClapError::invalid_subcommand(
                             arg_os.to_string_lossy().into_owned(),
                             cdate,
-                            self.meta.bin_name.as_ref().unwrap_or(&self.meta.name),
+                            self.app.bin_name.as_ref().unwrap_or(&self.app.name),
                             &*usage::create_error_usage(self, matcher, None),
                             self.color(),
                         ));
@@ -794,7 +681,7 @@ where
                     let n = (*na).clone().into();
                     needs_val_of = if needs_val_of != ParseResult::ValuesDone {
                         if let Some(p) = self.positionals.get(pos_counter) {
-                            ParseResult::Pos(p.b.name)
+                            ParseResult::Pos(p)
                         } else {
                             ParseResult::ValuesDone
                         }
@@ -820,7 +707,10 @@ where
                 debugln!("Parser::get_matches_with: .last(true) and --, setting last pos");
                 pos_counter = self.positionals.len();
             }
-            if let Some(p) = self.positionals.get(pos_counter) {
+            if let Some(p_name) = self.positionals.get(pos_counter) {
+                let p = args!(self)
+                    .find(|pa| pa.name == p_name)
+                    .expect(INTERNAL_ERROR_MSG);
                 if p.is_set(ArgSettings::Last) && !self.is_set(AS::TrailingValues) {
                     return Err(ClapError::unknown_argument(
                         &*arg_os.to_string_lossy(),
@@ -882,14 +772,14 @@ where
                     return Err(ClapError::invalid_subcommand(
                         arg_os.to_string_lossy().into_owned(),
                         cdate,
-                        self.meta.bin_name.as_ref().unwrap_or(&self.meta.name),
+                        self.app.bin_name.as_ref().unwrap_or(&self.app.name),
                         &*usage::create_error_usage(self, matcher, None),
                         self.color(),
                     ));
                 } else {
                     return Err(ClapError::unrecognized_subcommand(
                         arg_os.to_string_lossy().into_owned(),
-                        self.meta.bin_name.as_ref().unwrap_or(&self.meta.name),
+                        self.app.bin_name.as_ref().unwrap_or(&self.app.name),
                         self.color(),
                     ));
                 }
@@ -901,13 +791,13 @@ where
                 find_subcmd!(self, pos_sc_name)
                     .expect(INTERNAL_ERROR_MSG)
                     .p
-                    .meta
+                    .app
                     .name
                     .clone()
             };
             try!(self.parse_subcommand(&*sc_name, matcher, it));
         } else if self.is_set(AS::SubcommandRequired) {
-            let bn = self.meta.bin_name.as_ref().unwrap_or(&self.meta.name);
+            let bn = self.app.bin_name.as_ref().unwrap_or(&self.app.name);
             return Err(ClapError::missing_subcommand(
                 bn,
                 &usage::create_error_usage(self, matcher, None),
@@ -947,16 +837,17 @@ where
         }
         if !self.is_set(AS::InferSubcommands) {
             if let Some(sc) = find_subcmd!(self, arg_os) {
-                return (true, Some(&sc.p.meta.name));
+                return (true, Some(&sc.p.app.name));
             }
         } else {
-            let v = self.subcommands
+            let v = self.app
+                .subcommands
                 .iter()
                 .filter(|s| {
-                    starts(&s.p.meta.name[..], &*arg_os) ||
-                        (s.p.meta.aliases.is_some() &&
+                    starts(&s.p.app.name[..], &*arg_os) ||
+                        (s.p.app.aliases.is_some() &&
                              s.p
-                                 .meta
+                                 .app
                                  .aliases
                                  .as_ref()
                                  .unwrap()
@@ -964,7 +855,7 @@ where
                                  .filter(|&&(a, _)| starts(a, &*arg_os))
                                  .count() == 1)
                 })
-                .map(|sc| &sc.p.meta.name)
+                .map(|sc| &sc.p.app.name)
                 .collect::<Vec<_>>();
 
             if v.len() == 1 {
@@ -982,11 +873,7 @@ where
         debugln!("Parser::parse_help_subcommand;");
         let cmds: Vec<OsString> = it.map(|c| c.into()).collect();
         let mut help_help = false;
-        let mut bin_name = self.meta
-            .bin_name
-            .as_ref()
-            .unwrap_or(&self.meta.name)
-            .clone();
+        let mut bin_name = self.app.bin_name.as_ref().unwrap_or(&self.app.name).clone();
         let mut sc = {
             let mut sc: &Parser = self;
             for (i, cmd) in cmds.iter().enumerate() {
@@ -994,10 +881,11 @@ where
                     // cmd help help
                     help_help = true;
                 }
-                if let Some(c) = sc.subcommands
-                    .iter()
-                    .find(|s| &*s.p.meta.name == cmd)
-                    .map(|sc| &sc.p)
+                if let Some(c) = sc.subcommands.iter().find(|s| &*s.p.app.name == cmd).map(
+                    |sc| {
+                        &sc.p
+                    },
+                )
                 {
                     sc = c;
                     if i == cmds.len() - 1 {
@@ -1005,7 +893,7 @@ where
                     }
                 } else if let Some(c) = sc.subcommands
                            .iter()
-                           .find(|s| if let Some(ref als) = s.p.meta.aliases {
+                           .find(|s| if let Some(ref als) = s.p.app.aliases {
                     als.iter().any(|&(a, _)| a == &*cmd.to_string_lossy())
                 } else {
                     false
@@ -1019,25 +907,26 @@ where
                 } else {
                     return Err(ClapError::unrecognized_subcommand(
                         cmd.to_string_lossy().into_owned(),
-                        self.meta.bin_name.as_ref().unwrap_or(&self.meta.name),
+                        self.app.bin_name.as_ref().unwrap_or(&self.app.name),
                         self.color(),
                     ));
                 }
-                bin_name = format!("{} {}", bin_name, &*sc.meta.name);
+                bin_name = format!("{} {}", bin_name, &*sc.app.name);
             }
             sc.clone()
         };
         if help_help {
-            let mut pb = Pos::new("subcommand", 1);
-            pb.b.help = Some("The subcommand whose help message to display");
-            pb.set(ArgSettings::Multiple);
-            sc.positionals.insert(1, pb);
+            let mut pb = Arg::new("subcommand").index(1);
+            pb.help = Some("The subcommand whose help message to display");
+            pb._settings.set(ArgSettings::Multiple);
+            sc.positionals.insert(1, pb.name);
             sc.settings = sc.settings | self.g_settings;
+            sc.g_settings = self.g_settings;
         } else {
             sc.create_help_and_version();
         }
-        if sc.meta.bin_name != self.meta.bin_name {
-            sc.meta.bin_name = Some(format!("{} {}", bin_name, sc.meta.name));
+        if sc.app.bin_name != self.app.bin_name {
+            sc.app.bin_name = Some(format!("{} {}", bin_name, sc.app.name));
         }
         Err(sc._help(false))
     }
@@ -1065,17 +954,12 @@ where
         };
         let arg_allows_tac = match needs_val_of {
             ParseResult::Opt(name) => {
-                let o = self.opts
-                    .iter()
-                    .find(|o| o.b.name == name)
+                let o = opts!(self).find(|o| o.name == name)
                     .expect(INTERNAL_ERROR_MSG);
                 (o.is_set(ArgSettings::AllowLeadingHyphen) || app_wide_settings)
             }
             ParseResult::Pos(name) => {
-                let p = self.positionals
-                    .values()
-                    .find(|p| p.b.name == name)
-                    .expect(INTERNAL_ERROR_MSG);
+                let p = positionals!(self).find(|p| p.name == name).expect(INTERNAL_ERROR_MSG);
                 (p.is_set(ArgSettings::AllowLeadingHyphen) || app_wide_settings)
             }
             _ => false,
@@ -1134,41 +1018,38 @@ where
             }
         }
         mid_string.push_str(" ");
-        if let Some(ref mut sc) = self.subcommands
+        if let Some(ref mut sc) = self.app
+            .subcommands
             .iter_mut()
-            .find(|s| s.p.meta.name == sc_name)
+            .find(|s| s.p.app.name == sc_name)
         {
             let mut sc_matcher = ArgMatcher::new();
             // bin_name should be parent's bin_name + [<reqs>] + the sc's name separated by
             // a space
-            sc.p.meta.usage = Some(format!(
+            sc.p.app.usage = Some(format!(
                 "{}{}{}",
-                self.meta.bin_name.as_ref().unwrap_or(&String::new()),
-                if self.meta.bin_name.is_some() {
+                self.app.bin_name.as_ref().unwrap_or(&String::new()),
+                if self.app.bin_name.is_some() {
                     &*mid_string
                 } else {
                     ""
                 },
-                &*sc.p.meta.name
+                &*sc.p.app.name
             ));
-            sc.p.meta.bin_name = Some(format!(
+            sc.p.app.bin_name = Some(format!(
                 "{}{}{}",
-                self.meta.bin_name.as_ref().unwrap_or(&String::new()),
-                if self.meta.bin_name.is_some() {
-                    " "
-                } else {
-                    ""
-                },
-                &*sc.p.meta.name
+                self.app.bin_name.as_ref().unwrap_or(&String::new()),
+                if self.app.bin_name.is_some() { " " } else { "" },
+                &*sc.p.app.name
             ));
             debugln!(
                 "Parser::parse_subcommand: About to parse sc={}",
-                sc.p.meta.name
+                sc.p.app.name
             );
             debugln!("Parser::parse_subcommand: sc settings={:#?}", sc.p.settings);
             try!(sc.p.get_matches_with(&mut sc_matcher, it));
             matcher.subcommand(SubCommand {
-                name: sc.p.meta.name.clone(),
+                name: sc.p.app.name.clone(),
                 matches: sc_matcher.into(),
             });
         }
@@ -1201,9 +1082,9 @@ where
             );
             self.settings.set(AS::ValidArgFound);
             let ret = try!(self.parse_opt(val, opt, val.is_some(), matcher));
-            if self.cache.map_or(true, |name| name != opt.b.name) {
+            if self.cache.map_or(true, |name| name != opt.name) {
                 arg_post_processing!(self, opt, matcher);
-                self.cache = Some(opt.b.name);
+                self.cache = Some(opt.name);
             }
 
             return Ok(ret);
@@ -1220,9 +1101,9 @@ where
             try!(self.parse_flag(flag, matcher));
 
             // Handle conflicts, requirements, etc.
-            // if self.cache.map_or(true, |name| name != flag.b.name) {
+            // if self.cache.map_or(true, |name| name != flag.name) {
             arg_post_processing!(self, flag, matcher);
-            // self.cache = Some(flag.b.name);
+            // self.cache = Some(flag.name);
             // }
 
             return Ok(ParseResult::Flag);
@@ -1298,9 +1179,9 @@ where
                 // Default to "we're expecting a value later"
                 let ret = try!(self.parse_opt(val, opt, false, matcher));
 
-                if self.cache.map_or(true, |name| name != opt.b.name) {
+                if self.cache.map_or(true, |name| name != opt.name) {
                     arg_post_processing!(self, opt, matcher);
-                    self.cache = Some(opt.b.name);
+                    self.cache = Some(opt.name);
                 }
 
                 return Ok(ret);
@@ -1313,9 +1194,9 @@ where
 
                 // Handle conflicts, requirements, overrides, etc.
                 // Must be called here due to mutablilty
-                if self.cache.map_or(true, |name| name != flag.b.name) {
+                if self.cache.map_or(true, |name| name != flag.name) {
                     arg_post_processing!(self, flag, matcher);
-                    self.cache = Some(flag.b.name);
+                    self.cache = Some(flag.name);
                 }
             } else {
                 let arg = format!("-{}", c);
@@ -1333,12 +1214,12 @@ where
     fn parse_opt(
         &self,
         val: Option<&OsStr>,
-        opt: &Opt<'a, 'b>,
+        opt: &Arg<'a, 'b>,
         had_eq: bool,
         matcher: &mut ArgMatcher<'a>,
     ) -> ClapResult<ParseResult<'a>> {
-        debugln!("Parser::parse_opt; opt={}, val={:?}", opt.b.name, val);
-        debugln!("Parser::parse_opt; opt.settings={:?}", opt.b.settings);
+        debugln!("Parser::parse_opt; opt={}, val={:?}", opt.name, val);
+        debugln!("Parser::parse_opt; opt.settings={:?}", opt.settings);
         let mut has_eq = false;
 
         debug!("Parser::parse_opt; Checking for val...");
@@ -1374,9 +1255,9 @@ where
             sdebugln!("None");
         }
 
-        matcher.inc_occurrence_of(opt.b.name);
+        matcher.inc_occurrence_of(opt.name);
         // Increment or create the group "args"
-        self.groups_for_arg(opt.b.name)
+        self.groups_for_arg(opt.name)
             .and_then(|vec| Some(matcher.inc_occurrences_of(&*vec)));
 
         if val.is_none() ||
@@ -1385,21 +1266,18 @@ where
                      matcher.needs_more_vals(opt))
         {
             debugln!("Parser::parse_opt: More arg vals required...");
-            return Ok(ParseResult::Opt(opt.b.name));
+            return Ok(ParseResult::Opt(opt.name));
         }
         debugln!("Parser::parse_opt: More arg vals not required...");
         Ok(ParseResult::ValuesDone)
     }
 
-    fn add_val_to_arg<A>(
+    fn add_val_to_arg(
         &self,
-        arg: &A,
+        arg: &Arg,
         val: &OsStr,
         matcher: &mut ArgMatcher<'a>,
-    ) -> ClapResult<ParseResult<'a>>
-    where
-        A: AnyArg<'a, 'b> + Display,
-    {
+    ) -> ClapResult<ParseResult<'a>> {
         debugln!("Parser::add_val_to_arg; arg={}, val={:?}", arg.name(), val);
         debugln!(
             "Parser::add_val_to_arg; trailing_vals={:?}, DontDelimTrailingVals={:?}",
@@ -1431,15 +1309,12 @@ where
         }
     }
 
-    fn add_single_val_to_arg<A>(
+    fn add_single_val_to_arg(
         &self,
-        arg: &A,
+        arg: &Arg,
         v: &OsStr,
         matcher: &mut ArgMatcher<'a>,
-    ) -> ClapResult<ParseResult<'a>>
-    where
-        A: AnyArg<'a, 'b> + Display,
-    {
+    ) -> ClapResult<ParseResult<'a>> {
         debugln!("Parser::add_single_val_to_arg;");
         debugln!("Parser::add_single_val_to_arg: adding val...{:?}", v);
         if let Some(t) = arg.val_terminator() {
@@ -1464,14 +1339,14 @@ where
 
     fn parse_flag(
         &self,
-        flag: &Flag<'a, 'b>,
+        flag: &Arg<'a, 'b>,
         matcher: &mut ArgMatcher<'a>,
     ) -> ClapResult<ParseResult<'a>> {
         debugln!("Parser::parse_flag;");
 
-        matcher.inc_occurrence_of(flag.b.name);
+        matcher.inc_occurrence_of(flag.name);
         // Increment or create the group "args"
-        self.groups_for_arg(flag.b.name)
+        self.groups_for_arg(flag.name)
             .and_then(|vec| Some(matcher.inc_occurrences_of(&*vec)));
 
         Ok(ParseResult::Flag)
@@ -1527,8 +1402,8 @@ where
     pub fn add_defaults(&mut self, matcher: &mut ArgMatcher<'a>) -> ClapResult<()> {
         macro_rules! add_val {
             (@default $_self:ident, $a:ident, $m:ident) => {
-                if let Some(ref val) = $a.v.default_val {
-                    if $m.get($a.b.name).is_none() {
+                if let Some(ref val) = $a.default_val {
+                    if $m.get($a.name).is_none() {
                         try!($_self.add_val_to_arg($a, OsStr::new(val), $m));
 
                         if $_self.cache.map_or(true, |name| name != $a.name()) {
@@ -1539,9 +1414,9 @@ where
                 }
             };
             ($_self:ident, $a:ident, $m:ident) => {
-                if let Some(ref vm) = $a.v.default_vals_ifs {
+                if let Some(ref vm) = $a.default_vals_ifs {
                     let mut done = false;
-                    if $m.get($a.b.name).is_none() {
+                    if $m.get($a.name).is_none() {
                         for &(arg, val, default) in vm.values() {
                             let add = if let Some(a) = $m.get(arg) {
                                 if let Some(v) = val {
@@ -1572,10 +1447,10 @@ where
             };
         }
 
-        for o in &self.opts {
+        for o in opts!(self) {
             add_val!(self, o, matcher);
         }
-        for p in self.positionals.values() {
+        for p in positionals!(self) {
             add_val!(self, p, matcher);
         }
         Ok(())
@@ -1584,18 +1459,19 @@ where
     fn did_you_mean_error(&self, arg: &str, matcher: &mut ArgMatcher<'a>) -> ClapResult<()> {
 
         // Didn't match a flag or option
-        let suffix = suggestions::did_you_mean_flag_suffix(arg, longs!(self), &self.subcommands);
+        let suffix =
+            suggestions::did_you_mean_flag_suffix(arg, longs!(self), &self.app.subcommands);
 
         // Add the arg to the matches to build a proper usage string
         if let Some(name) = suffix.1 {
             if let Some(opt) = find_opt_by_long!(self, name) {
-                self.groups_for_arg(&*opt.b.name)
+                self.groups_for_arg(&*opt.name)
                     .and_then(|grps| Some(matcher.inc_occurrences_of(&*grps)));
-                matcher.insert(&*opt.b.name);
+                matcher.insert(&*opt.name);
             } else if let Some(flg) = find_flag_by_long!(self, name) {
-                self.groups_for_arg(&*flg.b.name)
+                self.groups_for_arg(&*flg.name)
                     .and_then(|grps| Some(matcher.inc_occurrences_of(&*grps)));
-                matcher.insert(&*flg.b.name);
+                matcher.insert(&*flg.name);
             }
         }
 
@@ -1647,23 +1523,23 @@ where
 
     pub fn write_version<W: Write>(&self, w: &mut W, use_long: bool) -> io::Result<()> {
         let ver = if use_long {
-            self.meta
+            self.app
                 .long_version
-                .unwrap_or_else(|| self.meta.version.unwrap_or(""))
+                .unwrap_or_else(|| self.app.version.unwrap_or(""))
         } else {
-            self.meta
+            self.app
                 .version
-                .unwrap_or_else(|| self.meta.long_version.unwrap_or(""))
+                .unwrap_or_else(|| self.app.long_version.unwrap_or(""))
         };
-        if let Some(bn) = self.meta.bin_name.as_ref() {
+        if let Some(bn) = self.app.bin_name.as_ref() {
             if bn.contains(' ') {
                 // Incase we're dealing with subcommands i.e. git mv is translated to git-mv
                 write!(w, "{} {}", bn.replace(" ", "-"), ver)
             } else {
-                write!(w, "{} {}", &self.meta.name[..], ver)
+                write!(w, "{} {}", &self.app.name[..], ver)
             }
         } else {
-            write!(w, "{} {}", &self.meta.name[..], ver)
+            write!(w, "{} {}", &self.app.name[..], ver)
         }
     }
 
@@ -1689,13 +1565,7 @@ where
     // -------- Getters / Setters
     //
 
-    pub fn flags(&self) -> Iter<Flag<'a, 'b>> { self.flags.iter() }
-
-    pub fn opts(&self) -> Iter<Opt<'a, 'b>> { self.opts.iter() }
-
-    pub fn positionals(&self) -> vec_map::Values<Pos<'a, 'b>> { self.positionals.values() }
-
-    pub fn subcommands(&self) -> Iter<App> { self.subcommands.iter() }
+    pub fn subcommands(&self) -> Iter<App> { self.app.subcommands.iter() }
 
     pub fn required(&self) -> Iter<&str> { self.required.iter() }
 
@@ -1746,12 +1616,12 @@ where
             .expect(INTERNAL_ERROR_MSG)
             .args
         {
-            if let Some(f) = self.flags.iter().find(|f| &f.b.name == n) {
+            if let Some(f) = flags!(self).find(|f| &f.name == n) {
                 args.push(f.to_string());
-            } else if let Some(f) = self.opts.iter().find(|o| &o.b.name == n) {
+            } else if let Some(f) = opts!(self).find(|o| &o.name == n) {
                 args.push(f.to_string());
-            } else if let Some(p) = self.positionals.values().find(|p| &p.b.name == n) {
-                args.push(p.b.name.to_owned());
+            } else if let Some(p) = positionals!(self).find(|p| &p.name == n) {
+                args.push(p.name.to_owned());
             } else {
                 g_vec.push(*n);
             }
@@ -1787,12 +1657,11 @@ where
 
     #[cfg_attr(feature = "cargo-clippy", allow(let_and_return))]
     fn use_long_help(&self) -> bool {
-        let ul = self.flags.iter().any(|f| f.b.long_help.is_some()) ||
-            self.opts.iter().any(|o| o.b.long_help.is_some()) ||
-            self.positionals.values().any(|p| p.b.long_help.is_some()) ||
-            self.subcommands
+        let ul = args!(self).any(|f| f.long_help.is_some()) ||
+            self.app
+                .subcommands
                 .iter()
-                .any(|s| s.p.meta.long_about.is_some());
+                .any(|s| s.p.app.long_about.is_some());
         debugln!("Parser::use_long_help: ret={:?}", ul);
         ul
     }
@@ -1814,7 +1683,7 @@ where
         }
     }
 
-    pub fn find_any_arg(&self, name: &str) -> Option<&AnyArg> {
+    pub fn find_any_arg(&self, name: &str) -> Option<&Arg> {
         if let Some(f) = find_by_name!(self, name, flags, iter) {
             return Some(f);
         }
@@ -1829,7 +1698,7 @@ where
 
     /// Check is a given string matches the binary name for this parser
     fn is_bin_name(&self, value: &str) -> bool {
-        self.meta
+        self.app
             .bin_name
             .as_ref()
             .and_then(|name| Some(value == name))
@@ -1838,7 +1707,7 @@ where
 
     /// Check is a given string is an alias for this parser
     fn is_alias(&self, value: &str) -> bool {
-        self.meta
+        self.app
             .aliases
             .as_ref()
             .and_then(|aliases| {
@@ -1858,9 +1727,9 @@ where
         debugln!("Parser::find_subcommand: sc={}", sc);
         debugln!(
             "Parser::find_subcommand: Currently in Parser...{}",
-            self.meta.bin_name.as_ref().unwrap()
+            self.app.bin_name.as_ref().unwrap()
         );
-        for s in &self.subcommands {
+        for s in &self.app.subcommands {
             if s.p.is_bin_name(sc) {
                 return Some(s);
             }
@@ -1879,144 +1748,68 @@ where
     }
 
     #[inline]
-    fn contains_long(&self, l: &str) -> bool { longs!(self).any(|al| al == &l) }
+    fn contains_long(&self, l: &str) -> bool { longs!(self).any(|arg_l| arg_l == &l) }
 
     #[inline]
     fn contains_short(&self, s: char) -> bool { shorts!(self).any(|arg_s| arg_s == &s) }
 
-    #[cfg_attr(feature = "lints", allow(needless_borrow))]
     #[inline]
-    pub fn has_args(&self) -> bool {
-        !(self.flags.is_empty() && self.opts.is_empty() && self.positionals.is_empty())
-    }
+    pub fn has_args(&self) -> bool { args!(self).next().is_some() }
 
     #[inline]
-    pub fn has_opts(&self) -> bool { !self.opts.is_empty() }
+    pub fn has_opts(&self) -> bool { opts!(self).next().is_some() }
 
     #[inline]
-    pub fn has_flags(&self) -> bool { !self.flags.is_empty() }
+    pub fn has_flags(&self) -> bool { flags!(self).next().is_some() }
 
     #[inline]
-    pub fn has_positionals(&self) -> bool { !self.positionals.is_empty() }
+    pub fn has_positionals(&self) -> bool { positionals!(self).next().is_some() }
 
     #[inline]
-    pub fn has_subcommands(&self) -> bool { !self.subcommands.is_empty() }
+    pub fn has_subcommands(&self) -> bool { !self.app.subcommands.is_empty() }
 
     #[inline]
     pub fn has_visible_opts(&self) -> bool {
-        if self.opts.is_empty() {
-            return false;
-        }
-        self.opts.iter().any(|o| !o.is_set(ArgSettings::Hidden))
+        opts!(self).any(|o| !o._settings.is_set(ArgSettings::Hidden))
     }
 
     #[inline]
     pub fn has_visible_flags(&self) -> bool {
-        if self.flags.is_empty() {
-            return false;
-        }
-        self.flags.iter().any(|f| !f.is_set(ArgSettings::Hidden))
+        flags!(self).any(|f| !f._settings.is_set(ArgSettings::Hidden))
     }
 
     #[inline]
     pub fn has_visible_positionals(&self) -> bool {
-        if self.positionals.is_empty() {
-            return false;
-        }
-        self.positionals
-            .values()
-            .any(|p| !p.is_set(ArgSettings::Hidden))
+        positionals!(self).any(|p| !p._settings.is_set(ArgSettings::Hidden))
     }
 
     #[inline]
     pub fn has_visible_subcommands(&self) -> bool {
-        if self.subcommands.is_empty() {
+        if self.app.subcommands.is_empty() {
             return false;
         }
-        self.subcommands.iter().any(|s| !s.p.is_set(AS::Hidden))
-    }
-
-    //
-    // -------- Completion Generation
-    //
-
-    pub fn gen_completions_to<W: Write>(&mut self, for_shell: Shell, buf: &mut W) {
-        if !self.is_set(AS::Propogated) {
-            self.propogate_help_version();
-            self.build_bin_names();
-            self.propogate_globals();
-            self.propogate_settings();
-            self.set(AS::Propogated);
-        }
-
-        ComplGen::new(self).generate(for_shell, buf)
-    }
-
-    pub fn gen_completions(&mut self, for_shell: Shell, od: OsString) {
-        use std::error::Error;
-
-        let out_dir = PathBuf::from(od);
-        let name = &*self.meta.bin_name.as_ref().unwrap().clone();
-        let file_name = match for_shell {
-            Shell::Bash => format!("{}.bash-completion", name),
-            Shell::Fish => format!("{}.fish", name),
-            Shell::Zsh => format!("_{}", name),
-            Shell::PowerShell => format!("_{}.ps1", name),
-        };
-
-        let mut file = match File::create(out_dir.join(file_name)) {
-            Err(why) => panic!("couldn't create completion file: {}", why.description()),
-            Ok(file) => file,
-        };
-        self.gen_completions_to(for_shell, &mut file)
+        self.app.subcommands.iter().any(|s| !s.p.is_set(AS::Hidden))
     }
 }
 
-impl<'keys, 'other, 'a> From<&'a App<'keys, 'other>> for Parser<'keys, 'other> {
-    fn from(a: &'a App) -> Self {
+impl<'keys, 'other, 'a> From<&'a mut App<'keys, 'other>> for Parser<'keys, 'other> {
+    fn from(a: &'a mut App) -> Self {
         let mut p = Parser::new(Cow::Borrowed(a), a.groups.len(), a.args.len());
 
-        for grp in &a.groups {
-            p.add_group_ref(grp);
-        }
-        for set in a.settings {
-            p.set(set);
-        }
-        for g_set in a.global_settings {
-            p.set(g_set);
-            p.g_settings.set(g_set);
-        }
-        // Global args are first because of derived display orders
-        for g_arg in &a.global_args {
-            p.add_arg_ref(g_arg);
-        }
-        for arg in &a.args {
-            p.add_arg_ref(arg);
-        }
-
-        p
-    }
-}
-
-impl<'keys, 'other> From<App<'keys, 'other>> for Parser<'keys, 'other> {
-    fn from(a: App) -> Self {
-        let mut p = Parser::new(Cow::Owned(a), a.groups.len(), a.args.len());
-        for grp in p.app.groups.into_iter() {
+        for grp in a.groups.iter_mut() {
             p.add_group(grp);
         }
-        for set in a.settings {
+        for set in &a.settings {
             p.set(set);
         }
-        for g_set in p.app.global_settings {
+        for g_set in &a.global_settings {
             p.set(g_set);
             p.g_settings.set(g_set);
         }
         // Global args are first because of derived display orders
-        for g_arg in p.app.global_args.into_iter() {
+        // an alternative would be to use some form of timestamp (but that would require a new dep)
+        for g_arg in a.global_args.iter_mut().chain(a.args.iter_mut()) {
             p.add_arg(g_arg);
-        }
-        for arg in p.app.args.into_iter() {
-            p.add_arg(arg);
         }
 
         p

@@ -19,13 +19,13 @@ macro_rules! remove_overriden {
     };
     ($_self:ident, $name:expr) => {
         debugln!("remove_overriden!;");
-        if let Some(o) = $_self.opts.iter() .find(|o| o.b.name == *$name) {
+        if let Some(o) = $_self.opts.iter() .find(|o| o.name == *$name) {
             remove_overriden!(@arg $_self, o);
-        } else if let Some(f) = $_self.flags.iter() .find(|f| f.b.name == *$name) {
+        } else if let Some(f) = $_self.flags.iter() .find(|f| f.name == *$name) {
             remove_overriden!(@arg $_self, f);
         } else {
             let p = $_self.positionals.values()
-                                      .find(|p| p.b.name == *$name)
+                                      .find(|p| p.name == *$name)
                                       .expect(INTERNAL_ERROR_MSG);
             remove_overriden!(@arg $_self, p);
         }
@@ -37,8 +37,8 @@ macro_rules! arg_post_processing {
         debugln!("arg_post_processing!;");
         // Handle POSIX overrides
         debug!("arg_post_processing!: Is '{}' in overrides...", $arg.to_string());
-        if $me.overrides.contains(&$arg.name()) {
-            if let Some(ref name) = find_name_from!($me, &$arg.name(), overrides, $matcher) {
+        if $me.overrides.contains(&$arg.name) {
+            if let Some(ref name) = find_name_from!($me, &$arg.name, overrides, $matcher) {
                 sdebugln!("Yes by {}", name);
                 $matcher.remove(name);
                 remove_overriden!($me, name);
@@ -47,7 +47,7 @@ macro_rules! arg_post_processing {
 
         // Add overrides
         debug!("arg_post_processing!: Does '{}' have overrides...", $arg.to_string());
-        if let Some(or) = $arg.overrides() {
+        if let Some(or) = $arg.overrides {
             sdebugln!("Yes");
             $matcher.remove_all(or);
             for pa in or { remove_overriden!($me, pa); }
@@ -57,7 +57,7 @@ macro_rules! arg_post_processing {
 
         // Handle conflicts
         debug!("arg_post_processing!: Does '{}' have conflicts...", $arg.to_string());
-        if let Some(bl) = $arg.conflicts() {
+        if let Some(bl) = $arg.conflicts {
             sdebugln!("Yes");
 
             for c in bl {
@@ -66,7 +66,7 @@ macro_rules! arg_post_processing {
                 if $matcher.contains(c) {
                     sdebugln!("Yes");
                     // find who conflictsed us...
-                    $me.conflicts.push(&$arg.b.name);
+                    $me.conflicts.push(&$arg.name);
                 } else {
                     sdebugln!("No");
                 }
@@ -80,7 +80,7 @@ macro_rules! arg_post_processing {
         // Add all required args which aren't already found in matcher to the master
         // list
         debug!("arg_post_processing!: Does '{}' have requirements...", $arg.to_string());
-        if let Some(reqs) = $arg.requires() {
+        if let Some(reqs) = $arg.requires {
             for n in reqs.iter()
                 .filter(|&&(val, _)| val.is_none())
                 .filter(|&&(_, req)| !$matcher.contains(&req))
@@ -148,17 +148,17 @@ macro_rules! parse_positional {
         }
         let _ = try!($_self.add_val_to_arg($p, &$arg_os, $matcher));
 
-        $matcher.inc_occurrence_of($p.b.name);
-        let _ = $_self.groups_for_arg($p.b.name)
+        $matcher.inc_occurrence_of($p.name);
+        let _ = $_self.groups_for_arg($p.name)
                       .and_then(|vec| Some($matcher.inc_occurrences_of(&*vec)));
-        if $_self.cache.map_or(true, |name| name != $p.b.name) {
+        if $_self.cache.map_or(true, |name| name != $p.name) {
             arg_post_processing!($_self, $p, $matcher);
-            $_self.cache = Some($p.b.name);
+            $_self.cache = Some($p.name);
         }
 
         $_self.settings.set(AS::ValidArgFound);
         // Only increment the positional counter if it doesn't allow multiples
-        if !$p.b.settings.is_set(ArgSettings::Multiple) {
+        if !$p.settings.is_set(ArgSettings::Multiple) {
             $pos_counter += 1;
         }
     };

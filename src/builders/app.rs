@@ -1,4 +1,5 @@
 // Std
+use std::iter::Chain;
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
@@ -24,8 +25,13 @@ use matched::ArgMatches;
 use output::Result as ClapResult;
 use output::Help;
 
-// TODO-v3-beta: remove
-use completions::Shell;
+// TODO-v3-beta: Remove
+pub enum Shell {
+    Powershell,
+    Bash,
+    Zsh,
+    Fish
+}
 
 /// Used to create a representation of a command line program and all possible command line
 /// arguments. Application settings are set using the "builder pattern" with the
@@ -62,38 +68,65 @@ pub struct App<'a, 'b>
 where
     'a: 'b,
 {
-    #[doc(hidden)] pub name: String,
-    #[doc(hidden)] pub bin_name: Option<String>,
-    #[doc(hidden)] pub author: Option<&'b str>,
-    #[doc(hidden)] pub version: Option<&'b str>,
-    #[doc(hidden)] pub about: Option<&'b str>,
-    #[doc(hidden)] pub long_about: Option<&'b str>,
-    #[doc(hidden)] pub after_help: Option<&'b str>,
-    #[doc(hidden)] pub before_help: Option<&'b str>,
-    #[doc(hidden)] pub override_usage: Option<&'b str>,
-    #[doc(hidden)] pub override_help: Option<&'b str>,
-    #[doc(hidden)] pub aliases: Option<Vec<&'b str>>,
-    #[doc(hidden)] pub visible_aliases: Option<Vec<&'b str>>,
-    #[doc(hidden)] pub display_order: usize,
-    #[doc(hidden)] pub term_witdth: Option<usize>,
-    #[doc(hidden)] pub max_term_width: Option<usize>,
-    #[doc(hidden)] pub help_template: Option<&'b str>,
-    #[doc(hidden)] pub args: Vec<Arg<'a, 'b>>,
-    #[doc(hidden)] pub global_args: Vec<Arg<'a, 'b>>,
-    #[doc(hidden)] pub subcommands: Vec<App<'a, 'b>>,
-    #[doc(hidden)] pub groups: Vec<ArgGroup<'a>>,
-    #[doc(hidden)] pub settings: Option<Vec<AppSettings>>,
-    #[doc(hidden)] pub global_settings: Option<Vec<AppSettings>>,
+    #[doc(hidden)]
+    pub name: String,
+    #[doc(hidden)]
+    pub bin_name: Option<String>,
+    #[doc(hidden)]
+    pub author: Option<&'b str>,
+    #[doc(hidden)]
+    pub version: Option<&'b str>,
+    #[doc(hidden)]
+    pub about: Option<&'b str>,
+    #[doc(hidden)]
+    pub long_about: Option<&'b str>,
+    #[doc(hidden)]
+    pub after_help: Option<&'b str>,
+    #[doc(hidden)]
+    pub before_help: Option<&'b str>,
+    #[doc(hidden)]
+    pub override_usage: Option<&'b str>,
+    #[doc(hidden)]
+    pub override_help: Option<&'b str>,
+    #[doc(hidden)]
+    pub aliases: Option<Vec<&'b str>>,
+    #[doc(hidden)]
+    pub visible_aliases: Option<Vec<&'b str>>,
+    #[doc(hidden)]
+    pub display_order: usize,
+    #[doc(hidden)]
+    pub term_witdth: Option<usize>,
+    #[doc(hidden)]
+    pub max_term_width: Option<usize>,
+    #[doc(hidden)]
+    pub help_template: Option<&'b str>,
+    #[doc(hidden)]
+    pub args: Vec<Arg<'a, 'b>>,
+    #[doc(hidden)]
+    pub global_args: Vec<Arg<'a, 'b>>,
+    #[doc(hidden)]
+    pub subcommands: Vec<App<'a, 'b>>,
+    #[doc(hidden)]
+    pub groups: Vec<ArgGroup<'a>>,
+    #[doc(hidden)]
+    pub settings: Vec<AppSettings>,
+    #[doc(hidden)]
+    pub global_settings: Vec<AppSettings>,
     // TODO-3x-beta: remove
-    #[doc(hidden)] pub help_short: Option<char>,
+    #[doc(hidden)]
+    pub help_short: Option<char>,
     // TODO-3x-beta: remove
-    #[doc(hidden)] pub version_short: Option<char>,
+    #[doc(hidden)]
+    pub version_short: Option<char>,
     // TODO-3x-beta: remove
-    #[doc(hidden)] pub help_message: Option<&'a str>,
+    #[doc(hidden)]
+    pub help_message: Option<&'a str>,
     // TODO-3x-beta: remove
-    #[doc(hidden)] pub version_message: Option<&'a str>,
+    #[doc(hidden)]
+    pub version_message: Option<&'a str>,
     // TODO-3x-beta: remove
-    #[doc(hidden)] pub long_version: Option<&'b str>,
+    #[doc(hidden)]
+    pub long_version: Option<&'b str>,
 }
 
 
@@ -687,8 +720,15 @@ impl<'a, 'b> App<'a, 'b> {
     /// # Panics
     ///
     /// Panics if `arg` doesn't exist
-    pub fn mut_arg<F>(mut self, arg: &str, f: F) -> Self where F: Fn(Arg) -> Arg {
-        let a = self.args.find_mut(|a| a.name == arg).unwrap_or(self.global_args.find(|a| a.name == arg).unwrap());
+    pub fn mut_arg<F>(mut self, arg: &str, f: F) -> Self
+    where
+        F: Fn(Arg<'a, 'b>) -> Arg<'a, 'b>,
+    {
+        let a = self.args.find_mut(|a| a.name == arg).unwrap_or(
+            self.global_args
+                .find(|a| a.name == arg)
+                .unwrap(),
+        );
         self.args.push(f(a));
         self
     }
@@ -822,7 +862,10 @@ impl<'a, 'b> App<'a, 'b> {
     /// # Panics
     ///
     /// Panics if `group` doesn't exist
-    pub fn mut_group<F>(mut self, group: &str, f: F) -> Self where F: Fn(ArgGroup) -> ArgGroup {
+    pub fn mut_group<F>(mut self, group: &str, f: F) -> Self
+    where
+        F: Fn(ArgGroup<'a>) -> ArgGroup<'a>,
+    {
         let g = self.groups.find_mut(|g| g.name == group).unwrap();
         self.groups.push(f(g));
         self
@@ -908,7 +951,10 @@ impl<'a, 'b> App<'a, 'b> {
     /// # Panics
     ///
     /// Panics if `subcommand` doesn't exist
-    pub fn mut_subcommand<F>(mut self, subcommand: &str, f: F) -> Self where F: Fn(App) -> App {
+    pub fn mut_subcommand<F>(mut self, subcommand: &str, f: F) -> Self
+    where
+        F: Fn(App<'a, 'b>) -> App<'a, 'b>,
+    {
         let s = self.subcommands.find_mut(|s| s.name == subcommand).unwrap();
         self.subcommands.push(f(s));
         self
@@ -1346,7 +1392,7 @@ impl<'a, 'b> App<'a, 'b> {
 
         if parser.is_set(AppSettings::PropagateGlobalValuesDown) {
             for a in &self.global_args {
-                matcher.propagate(a.b.name);
+                matcher.propagate(a.name);
             }
         }
 
@@ -1409,7 +1455,7 @@ impl<'a, 'b> App<'a, 'b> {
 
         if parser.is_set(AppSettings::PropagateGlobalValuesDown) {
             for a in &self.global_args {
-                matcher.propagate(a.b.name);
+                matcher.propagate(a.name);
             }
         }
 
@@ -1526,7 +1572,7 @@ impl<'a, 'b> App<'a, 'b> {
     }
 
     /// Deprecated
-    #[deprecated(since = "2.24.2", note = "Use clap::completions::generate")]
+    #[deprecated(since = "2.24.2", note = "Use clap_completeions::generate")]
     pub fn gen_completions<T: Into<OsString>, S: Into<String>>(
         &mut self,
         bin_name: S,
@@ -1534,12 +1580,10 @@ impl<'a, 'b> App<'a, 'b> {
         out_dir: T,
     ) {
         unimplemented!();
-        self.p.meta.bin_name = Some(bin_name.into());
-        self.p.gen_completions(for_shell, out_dir.into());
     }
 
     /// Deprecated
-    #[deprecated(since = "2.24.2", note = "Use clap::completions::generate")]
+    #[deprecated(since = "2.24.2", note = "Use clap_completions::generate_to")]
     pub fn gen_completions_to<W: Write, S: Into<String>>(
         &mut self,
         bin_name: S,
@@ -1547,8 +1591,6 @@ impl<'a, 'b> App<'a, 'b> {
         buf: &mut W,
     ) {
         unimplemented!();
-        self.p.meta.bin_name = Some(bin_name.into());
-        self.p.gen_completions_to(for_shell, buf);
     }
 
     /// Deprecated
@@ -1799,10 +1841,10 @@ impl<'n, 'e> AnyArg<'n, 'e> for App<'n, 'e> {
     fn conflicts(&self) -> Option<&[&'e str]> { None }
     fn required_unless(&self) -> Option<&[&'e str]> { None }
     fn val_names(&self) -> Option<&VecMap<&'e str>> { None }
-    fn is_set(&self, _: ArgSettings) -> bool { false }
+    fn _is_set(&self, _: ArgSettings) -> bool { false }
     fn val_terminator(&self) -> Option<&'e str> { None }
-    fn set(&mut self, _: ArgSettings) {
-        unreachable!("App struct does not support AnyArg::set, this is a bug!")
+    fn _set(&mut self, _: ArgSettings) {
+        unreachable!("App struct does not support AnyArg::_set, this is a bug!")
     }
     fn has_switch(&self) -> bool { false }
     fn max_vals(&self) -> Option<u64> { None }
@@ -1822,20 +1864,8 @@ impl<'n, 'e> AnyArg<'n, 'e> for App<'n, 'e> {
         None
     }
     fn longest_filter(&self) -> bool { true }
-    fn aliases(&self) -> Option<Vec<&'e str>> {
-        if let Some(ref aliases) = self.p.meta.aliases {
-            let vis_aliases: Vec<_> = aliases
-                .iter()
-                .filter_map(|&(n, v)| if v { Some(n) } else { None })
-                .collect();
-            if vis_aliases.is_empty() {
-                None
-            } else {
-                Some(vis_aliases)
-            }
-        } else {
-            None
-        }
+    fn aliases(&self) -> Option<Chain<&'e str, &'e str>> {
+        self.aliases.iter().chain(self.visible_aliases.iter())
     }
 }
 

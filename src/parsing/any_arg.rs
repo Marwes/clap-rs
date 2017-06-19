@@ -2,6 +2,7 @@
 use std::rc::Rc;
 use std::fmt as std_fmt;
 use std::ffi::{OsStr, OsString};
+use std::iter::Chain;
 
 // Third Party
 use vec_map::{self, VecMap};
@@ -13,12 +14,12 @@ use builders::ArgSettings;
 pub trait AnyArg<'n, 'e>: std_fmt::Display {
     fn name(&self) -> &'n str;
     fn overrides(&self) -> Option<&[&'e str]>;
-    fn aliases(&self) -> Option<Vec<&'e str>>;
+    fn aliases(&self) -> Option<Chain<&'e str, &'e str>>;
     fn requires(&self) -> Option<&[(Option<&'e str>, &'n str)]>;
     fn conflicts(&self) -> Option<&[&'e str]>;
     fn required_unless(&self) -> Option<&[&'e str]>;
-    fn is_set(&self, ArgSettings) -> bool;
-    fn set(&mut self, ArgSettings);
+    fn _is_set(&self, ArgSettings) -> bool;
+    fn _set(&mut self, ArgSettings);
     fn has_switch(&self) -> bool;
     fn max_vals(&self) -> Option<u64>;
     fn min_vals(&self) -> Option<u64>;

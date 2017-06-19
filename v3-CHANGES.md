@@ -26,3 +26,5 @@
 * App::get_matches_from_mut
 * App::get_matches_safe_mut
 * clap::utils
+* Completions to clap_completions crate
+* ArgSettings::AllowLeadingHyphen -> ArgSettings::AllowHyphenValues
