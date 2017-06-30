@@ -406,12 +406,11 @@ impl Error {
     #[doc(hidden)]
     pub fn argument_conflict<O, U>(
         arg: &Arg,
-        other: Option<O>,
+        other: Option<String>,
         usage: U,
         color: ColorWhen,
     ) -> Self
     where
-        O: Into<String>,
         U: Display,
     {
         let mut v = vec![arg.name.to_owned()];
@@ -427,10 +426,9 @@ impl Error {
                 c.error("error:"),
                 c.warning(&*arg.to_string()),
                 match other {
-                    Some(name) => {
-                        let n = name.into();
-                        v.push(n.clone());
-                        c.warning(format!("'{}'", n))
+                    Some(ref arg) => {
+                        v.push(arg.to_owned());
+                        c.warning(format!("'{}'", arg))
                     }
                     None => c.none("one or more of the other specified arguments".to_owned()),
                 },

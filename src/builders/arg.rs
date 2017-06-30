@@ -41,7 +41,7 @@ pub fn default_dispaly_order() -> usize { 999 }
 /// ```rust
 /// # use clap::Arg;
 /// // Using the traditional builder pattern and setting each option manually
-/// let cfg = Arg::with_name("config")
+/// let cfg = Arg::new("config")
 ///       .short("c")
 ///       .long("config")
 ///       .takes_value(true)
@@ -65,17 +65,19 @@ where
     #[doc(hidden)]
     pub long_help: Option<&'b str>,
     #[doc(hidden)]
-    pub conflicts_with: Option<Vec<&'a str>>,
+    pub conflicts: Option<Vec<&'a str>>,
     #[doc(hidden)]
     pub settings: Vec<ArgSettings>,
     #[doc(hidden)]
     pub required_unless: Option<Vec<&'a str>>,
     #[doc(hidden)]
-    pub overrides_with: Option<Vec<&'a str>>,
+    pub overrides: Option<Vec<&'a str>>,
     #[doc(hidden)]
     pub groups: Option<Vec<&'a str>>,
     #[doc(hidden)]
-    pub requires: Option<Vec<(Option<&'b str>, &'a str)>>,
+    pub requires: Option<Vec<&'a str>>,
+    #[doc(hidden)]
+    pub requires_if: Option<Vec<(&'a str, Option<&'b str>)>>,
     #[doc(hidden)]
     pub short: Option<char>,
     #[doc(hidden)]

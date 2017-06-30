@@ -148,33 +148,18 @@ impl<'a, 'b, 'z> Validator<'a, 'b, 'z> {
             self.0.conflicts
         );
         macro_rules! build_err {
-            ($p:expr, $name:expr, $matcher:ident) => ({
+            ($parser:expr, $name:expr, $matcher:ident) => ({
                 debugln!("build_err!: name={}", $name);
-                let mut c_with = find_from!($p, &$name, conflicts, &$matcher);
-                c_with = c_with.or(
-                    $p.find_any_arg(&$name).map_or(None, |aa| aa.conflicts())
-                                           .map_or(None, 
-                                                |bl| bl.iter().find(|arg| $matcher.contains(arg)))
-                                           .map_or(None, |an| $p.find_any_arg(an))
-                                           .map_or(None, |aa| Some(format!("{}", aa)))
-                );
+                let c_with = find_matched_that_contains_arg_in!($parser.app, &$name, conflicts, &$matcher)
+                    .map_or(None, |aa| Some(format!("{}", aa)));
                 debugln!("build_err!: '{:?}' conflicts with '{}'", c_with, &$name);
                 $matcher.remove(&$name);
-                let usg = usage::create_error_usage($p, $matcher, None);
-                if let Some(f) = find_by_name!($p, $name, flags, iter) {
-                    debugln!("build_err!: It was a flag...");
-                    ClapError::argument_conflict(f, c_with, &*usg, self.0.color())
-                } else if let Some(o) = find_by_name!($p, $name, opts, iter) {
-                   debugln!("build_err!: It was an option...");
-                    ClapError::argument_conflict(o, c_with, &*usg, self.0.color())
+                let usg = usage::create_error_usage($parser, $matcher, None);
+                if let Some(p) = args!($parser.app).find(|a| &a.name == $name) {
+                    debugln!("build_err!: It was a positional...");
+                    ClapError::argument_conflict(p, c_with, &*usg, self.0.color())
                 } else {
-                    match find_by_name!($p, $name, positionals, values) {
-                        Some(p) => {
-                            debugln!("build_err!: It was a positional...");
-                            ClapError::argument_conflict(p, c_with, &*usg, self.0.color())
-                        },
-                        None    => panic!(INTERNAL_ERROR_MSG)
-                    }
+                    panic!(INTERNAL_ERROR_MSG)
                 }
             });
         }
@@ -184,7 +169,7 @@ impl<'a, 'b, 'z> Validator<'a, 'b, 'z> {
                 "Validator::validate_conflicts:iter: Checking conflictsed name: {}",
                 name
             );
-            if self.0.groups.iter().any(|g| &g.name == name) {
+            if self.0.app.groups.iter().any(|g| &g.name == name) {
                 debugln!("Validator::validate_conflicts:iter: groups contains it...");
                 for n in self.0.arg_names_in_group(name) {
                     debugln!(
@@ -212,19 +197,14 @@ impl<'a, 'b, 'z> Validator<'a, 'b, 'z> {
                 name,
                 ma.vals
             );
-            if let Some(opt) = find_by_name!(self.0, *name, opts, iter) {
-                try!(self.validate_arg_num_vals(opt, ma, matcher));
-                try!(self.validate_values(opt, ma, matcher));
-                try!(self.validate_arg_requires(opt, ma, matcher));
-                try!(self.validate_arg_num_occurs(opt, ma, matcher));
-            } else if let Some(flag) = find_by_name!(self.0, *name, flags, iter) {
+            if let Some(arg) = opts!(self.0).find(|a| a.name == *name).or(positionals!(self.0).find(|a| a.name == *name)).or(None) {
+                try!(self.validate_arg_num_vals(arg, ma, matcher));
+                try!(self.validate_values(arg, ma, matcher));
+                try!(self.validate_arg_requires(arg, ma, matcher));
+                try!(self.validate_arg_num_occurs(arg, ma, matcher));
+            } else if let Some(flag) = flags!(self.0).find(|a| a.name == *name) {
                 try!(self.validate_arg_requires(flag, ma, matcher));
                 try!(self.validate_arg_num_occurs(flag, ma, matcher));
-            } else if let Some(pos) = find_by_name!(self.0, *name, positionals, values) {
-                try!(self.validate_arg_num_vals(pos, ma, matcher));
-                try!(self.validate_arg_num_occurs(pos, ma, matcher));
-                try!(self.validate_values(pos, ma, matcher));
-                try!(self.validate_arg_requires(pos, ma, matcher));
             } else {
                 let grp = self.0
                     .groups
@@ -241,14 +221,12 @@ impl<'a, 'b, 'z> Validator<'a, 'b, 'z> {
         Ok(())
     }
 
-    fn validate_arg_num_occurs<A>(
+    fn validate_arg_num_occurs(
         &self,
-        a: &A,
+        a: &Arg,
         ma: &MatchedArg,
         matcher: &ArgMatcher,
     ) -> ClapResult<()>
-    where
-        A: AnyArg<'a, 'b> + Display,
     {
         debugln!("Validator::validate_arg_num_occurs: a={};", a.name());
         if ma.occurs > 1 && !a.is_set(ArgSettings::Multiple) {
@@ -375,15 +353,7 @@ impl<'a, 'b, 'z> Validator<'a, 'b, 'z> {
             if matcher.contains(name) {
                 continue 'outer;
             }
-            if let Some(a) = find_by_name!(self.0, *name, flags, iter) {
-                if self.is_missing_required_ok(a, matcher) {
-                    continue 'outer;
-                }
-            } else if let Some(a) = find_by_name!(self.0, *name, opts, iter) {
-                if self.is_missing_required_ok(a, matcher) {
-                    continue 'outer;
-                }
-            } else if let Some(a) = find_by_name!(self.0, *name, positionals, values) {
+            if let Some(a) = args!(self.0).find(|a| a.name == *name) {
                 if self.is_missing_required_ok(a, matcher) {
                     continue 'outer;
                 }

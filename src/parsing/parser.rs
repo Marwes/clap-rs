@@ -397,7 +397,7 @@ where
     pub fn derive_display_order(&mut self) {
         if self.is_set(AS::DeriveDisplayOrder) {
             let unified = self.is_set(AS::UnifiedHelpMessage);
-            for (i, a) in args_mut!(self)
+            for (i, a) in parser_args_mut!(self)
                 .enumerate()
                 .filter(|&(_, ref a)| a.disp_ord == 999)
             {
@@ -405,18 +405,18 @@ where
             }
             for (i, sc) in &mut self.app.subcommands.iter_mut().enumerate().filter(
                 |&(_, ref sc)| {
-                    sc.p.app.disp_ord == 999
+                    sc.app.disp_ord == 999
                 },
             )
             {
-                sc.p.app.disp_ord = i;
+                sc.app.disp_ord = i;
             }
         }
         // TODO-v3-alpha: display order for children shouldn't be derived unless we need to display
         // it!
         //
         // for sc in &mut self.app.subcommands {
-        //     sc.p.derive_display_order();
+        //     sc.derive_display_order();
         // }
     }
 
@@ -428,10 +428,10 @@ where
             // done and to recursively call this method
             {
                 for a in &self.global_args {
-                    sc.p.add_arg_ref(a);
+                    sc.add_arg_ref(a);
                 }
             }
-            sc.p.propogate_globals();
+            sc.propogate_globals();
         }
     }
 
@@ -449,9 +449,9 @@ where
         {
             debugln!(
                 "Parser::propogate_settings: sc={}, settings={:#?}, g_settings={:#?}",
-                sc.p.app.name,
-                sc.p.settings,
-                sc.p.g_settings
+                sc.app.name,
+                sc.settings,
+                sc.g_settings
             );
             // We have to create a new scope in order to tell rustc the borrow of `sc` is
             // done and to recursively call this method
@@ -460,19 +460,17 @@ where
                 let gv = self.settings.is_set(AS::GlobalVersion);
 
                 if vsc {
-                    sc.p.set(AS::DisableVersion);
+                    sc.set(AS::DisableVersion);
                 }
-                if gv && sc.p.app.version.is_none() && self.app.version.is_some() {
-                    sc.p.set(AS::GlobalVersion);
-                    sc.p.app.version = Some(self.app.version.unwrap());
+                if gv && sc.app.version.is_none() && self.app.version.is_some() {
+                    sc.set(AS::GlobalVersion);
+                    sc.app.version = Some(self.app.version.unwrap());
                 }
-                sc.p.settings = sc.p.settings | self.g_settings;
-                sc.p.g_settings = sc.p.g_settings | self.g_settings;
-                sc.p.app.term_w = self.app.term_w;
-                sc.p.app.max_w = self.app.max_w;
+                sc.settings = sc.settings | self.g_settings;
+                sc.g_settings = sc.g_settings | self.g_settings;
+                sc.app.term_w = self.app.term_w;
+                sc.app.max_w = self.app.max_w;
             }
-            // TODO-v3-alpha: This should only propagate to a particular SC, not all
-            // sc.p.propogate_settings();
         }
     }
 
@@ -534,15 +532,14 @@ where
         // globals should only be propagated on completions...consider moving this call
         // self.propagate_globals();
 
-        self.propagate_settings();
         self.derive_display_order();
 
         // Verify all positional assertions pass
         debug_assert!(self.app_debug_asserts());
-        if positionals!(self).any(|a| {
-            a.is_set(ArgSettings::Multiple) && (a.index as usize != self.positionals.len())
+        if positionals!(self.app).any(|a| {
+            a.is_set(ArgSettings::Multiple) && (a.index.unwrap() != positionals!(self.app).count())
         }) &&
-            positionals!(self).last()
+            positionals!(self.app).last()
                 .map_or(false, |p| !p.is_set(ArgSettings::Last))
         {
             self.settings.set(AS::LowIndexMultiplePositional);
@@ -596,7 +593,7 @@ where
                 if !starts_new_arg {
                     if let ParseResult::Opt(name) = needs_val_of {
                         // Check to see if parsing a value from a previous arg
-                        let arg = opts!(self).find(|o| o.name == name)
+                        let arg = opts!(self.app).find(|o| o.name == name)
                             .expect(INTERNAL_ERROR_MSG);
                         // get the Opt so we can check the settings
                         needs_val_of = try!(self.add_val_to_arg(arg, &arg_os, matcher));
@@ -708,8 +705,8 @@ where
                 pos_counter = self.positionals.len();
             }
             if let Some(p_name) = self.positionals.get(pos_counter) {
-                let p = args!(self)
-                    .find(|pa| pa.name == p_name)
+                let p = args!(self.app)
+                    .find(|pa| &pa.name == p_name)
                     .expect(INTERNAL_ERROR_MSG);
                 if p.is_set(ArgSettings::Last) && !self.is_set(AS::TrailingValues) {
                     return Err(ClapError::unknown_argument(
@@ -788,10 +785,8 @@ where
 
         if let Some(ref pos_sc_name) = subcmd_name {
             let sc_name = {
-                find_subcmd!(self, pos_sc_name)
+                find_subcommand!(self.app, pos_sc_name)
                     .expect(INTERNAL_ERROR_MSG)
-                    .p
-                    .app
                     .name
                     .clone()
             };
@@ -836,16 +831,16 @@ where
             return (false, None);
         }
         if !self.is_set(AS::InferSubcommands) {
-            if let Some(sc) = find_subcmd!(self, arg_os) {
-                return (true, Some(&sc.p.app.name));
+            if let Some(sc) = find_subcommand!(self.app, arg_os) {
+                return (true, Some(&sc.name));
             }
         } else {
             let v = self.app
                 .subcommands
                 .iter()
                 .filter(|s| {
-                    starts(&s.p.app.name[..], &*arg_os) ||
-                        (s.p.app.aliases.is_some() &&
+                    starts(&s.app.name[..], &*arg_os) ||
+                        (s.app.aliases.is_some() &&
                              s.p
                                  .app
                                  .aliases
@@ -855,7 +850,7 @@ where
                                  .filter(|&&(a, _)| starts(a, &*arg_os))
                                  .count() == 1)
                 })
-                .map(|sc| &sc.p.app.name)
+                .map(|sc| &sc.app.name)
                 .collect::<Vec<_>>();
 
             if v.len() == 1 {
@@ -881,7 +876,7 @@ where
                     // cmd help help
                     help_help = true;
                 }
-                if let Some(c) = sc.subcommands.iter().find(|s| &*s.p.app.name == cmd).map(
+                if let Some(c) = sc.subcommands.iter().find(|s| &*s.app.name == cmd).map(
                     |sc| {
                         &sc.p
                     },
@@ -893,7 +888,7 @@ where
                     }
                 } else if let Some(c) = sc.subcommands
                            .iter()
-                           .find(|s| if let Some(ref als) = s.p.app.aliases {
+                           .find(|s| if let Some(ref als) = s.app.aliases {
                     als.iter().any(|&(a, _)| a == &*cmd.to_string_lossy())
                 } else {
                     false
@@ -1021,12 +1016,12 @@ where
         if let Some(ref mut sc) = self.app
             .subcommands
             .iter_mut()
-            .find(|s| s.p.app.name == sc_name)
+            .find(|s| s.app.name == sc_name)
         {
             let mut sc_matcher = ArgMatcher::new();
             // bin_name should be parent's bin_name + [<reqs>] + the sc's name separated by
             // a space
-            sc.p.app.usage = Some(format!(
+            sc.app.usage = Some(format!(
                 "{}{}{}",
                 self.app.bin_name.as_ref().unwrap_or(&String::new()),
                 if self.app.bin_name.is_some() {
@@ -1034,22 +1029,23 @@ where
                 } else {
                     ""
                 },
-                &*sc.p.app.name
+                &*sc.app.name
             ));
-            sc.p.app.bin_name = Some(format!(
+            sc.app.bin_name = Some(format!(
                 "{}{}{}",
                 self.app.bin_name.as_ref().unwrap_or(&String::new()),
                 if self.app.bin_name.is_some() { " " } else { "" },
-                &*sc.p.app.name
+                &*sc.app.name
             ));
             debugln!(
                 "Parser::parse_subcommand: About to parse sc={}",
-                sc.p.app.name
+                sc.app.name
             );
-            debugln!("Parser::parse_subcommand: sc settings={:#?}", sc.p.settings);
-            try!(sc.p.get_matches_with(&mut sc_matcher, it));
+            debugln!("Parser::parse_subcommand: sc settings={:#?}", sc.settings);
+            self.propagate_settings_to(sc.app.name);
+            try!(sc.get_matches_with(&mut sc_matcher, it));
             matcher.subcommand(SubCommand {
-                name: sc.p.app.name.clone(),
+                name: sc.app.name.clone(),
                 matches: sc_matcher.into(),
             });
         }
@@ -1075,7 +1071,7 @@ where
             full_arg.trim_left_matches(b'-')
         };
 
-        if let Some(opt) = find_opt_by_long!(@os self, arg) {
+        if let Some(opt) = find_opt_by_long!(@os self.app, arg) {
             debugln!(
                 "Parser::parse_long_arg: Found valid opt '{}'",
                 opt.to_string()
@@ -1088,7 +1084,7 @@ where
             }
 
             return Ok(ret);
-        } else if let Some(flag) = find_flag_by_long!(@os self, arg) {
+        } else if let Some(flag) = find_flag_by_long!(@os self.app, arg) {
             debugln!(
                 "Parser::parse_long_arg: Found valid flag '{}'",
                 flag.to_string()
@@ -1152,7 +1148,7 @@ where
             // concatenated value: -oval
             // Option: -o
             // Value: val
-            if let Some(opt) = find_opt_by_short!(self, c) {
+            if let Some(opt) = find_opt_by_short!(self.app, c) {
                 debugln!("Parser::parse_short_arg:iter:{}: Found valid opt", c);
                 self.settings.set(AS::ValidArgFound);
                 // Check for trailing concatenated value
@@ -1185,7 +1181,7 @@ where
                 }
 
                 return Ok(ret);
-            } else if let Some(flag) = find_flag_by_short!(self, c) {
+            } else if let Some(flag) = find_flag_by_short!(self.app, c) {
                 debugln!("Parser::parse_short_arg:iter:{}: Found valid flag", c);
                 self.settings.set(AS::ValidArgFound);
                 // Only flags can be help or version
@@ -1402,19 +1398,19 @@ where
     pub fn add_defaults(&mut self, matcher: &mut ArgMatcher<'a>) -> ClapResult<()> {
         macro_rules! add_val {
             (@default $_self:ident, $a:ident, $m:ident) => {
-                if let Some(ref val) = $a.default_val {
+                if let Some(ref val) = $a.default_value {
                     if $m.get($a.name).is_none() {
                         try!($_self.add_val_to_arg($a, OsStr::new(val), $m));
 
-                        if $_self.cache.map_or(true, |name| name != $a.name()) {
+                        if $_self.cache.map_or(true, |name| name != $a.name) {
                             arg_post_processing!($_self, $a, $m);
-                            $_self.cache = Some($a.name());
+                            $_self.cache = Some($a.name);
                         }
                     }
                 }
             };
             ($_self:ident, $a:ident, $m:ident) => {
-                if let Some(ref vm) = $a.default_vals_ifs {
+                if let Some(ref vm) = $a.default_value_ifs {
                     let mut done = false;
                     if $m.get($a.name).is_none() {
                         for &(arg, val, default) in vm.values() {
@@ -1429,9 +1425,9 @@ where
                             };
                             if add {
                                 try!($_self.add_val_to_arg($a, OsStr::new(default), $m));
-                                if $_self.cache.map_or(true, |name| name != $a.name()) {
+                                if $_self.cache.map_or(true, |name| name != $a.name) {
                                     arg_post_processing!($_self, $a, $m);
-                                    $_self.cache = Some($a.name());
+                                    $_self.cache = Some($a.name);
                                 }
                                 done = true;
                                 break;
@@ -1447,10 +1443,10 @@ where
             };
         }
 
-        for o in opts!(self) {
+        for o in opts!(self.app) {
             add_val!(self, o, matcher);
         }
-        for p in positionals!(self) {
+        for p in positionals!(self.app) {
             add_val!(self, p, matcher);
         }
         Ok(())
@@ -1460,15 +1456,15 @@ where
 
         // Didn't match a flag or option
         let suffix =
-            suggestions::did_you_mean_flag_suffix(arg, longs!(self), &self.app.subcommands);
+            suggestions::did_you_mean_flag_suffix(arg, longs!(self.app), &self.app.subcommands);
 
         // Add the arg to the matches to build a proper usage string
         if let Some(name) = suffix.1 {
-            if let Some(opt) = find_opt_by_long!(self, name) {
+            if let Some(opt) = find_opt_by_long!(self.app, name) {
                 self.groups_for_arg(&*opt.name)
                     .and_then(|grps| Some(matcher.inc_occurrences_of(&*grps)));
                 matcher.insert(&*opt.name);
-            } else if let Some(flg) = find_flag_by_long!(self, name) {
+            } else if let Some(flg) = find_flag_by_long!(self.app, name) {
                 self.groups_for_arg(&*flg.name)
                     .and_then(|grps| Some(matcher.inc_occurrences_of(&*grps)));
                 matcher.insert(&*flg.name);
@@ -1591,7 +1587,7 @@ where
         }
         let mut res = vec![];
         debugln!("Parser::groups_for_arg: Searching through groups...");
-        for grp in &self.groups {
+        for grp in &self.app.groups {
             for a in &grp.args {
                 if a == &name {
                     sdebugln!("\tFound '{}'", grp.name);
@@ -1661,7 +1657,7 @@ where
             self.app
                 .subcommands
                 .iter()
-                .any(|s| s.p.app.long_about.is_some());
+                .any(|s| s.app.long_about.is_some());
         debugln!("Parser::use_long_help: ret={:?}", ul);
         ul
     }
@@ -1681,19 +1677,6 @@ where
             sdebugln!("Auto");
             ColorWhen::Auto
         }
-    }
-
-    pub fn find_any_arg(&self, name: &str) -> Option<&Arg> {
-        if let Some(f) = find_by_name!(self, name, flags, iter) {
-            return Some(f);
-        }
-        if let Some(o) = find_by_name!(self, name, opts, iter) {
-            return Some(o);
-        }
-        if let Some(p) = find_by_name!(self, name, positionals, values) {
-            return Some(p);
-        }
-        None
     }
 
     /// Check is a given string matches the binary name for this parser
@@ -1730,17 +1713,17 @@ where
             self.app.bin_name.as_ref().unwrap()
         );
         for s in &self.app.subcommands {
-            if s.p.is_bin_name(sc) {
+            if s.is_bin_name(sc) {
                 return Some(s);
             }
             // XXX: why do we split here?
             // isn't `sc` supposed to be single word already?
             let last = sc.split(' ').rev().next().expect(INTERNAL_ERROR_MSG);
-            if s.p.is_alias(last) {
+            if s.is_alias(last) {
                 return Some(s);
             }
 
-            if let Some(app) = s.p.find_subcommand(sc) {
+            if let Some(app) = s.find_subcommand(sc) {
                 return Some(app);
             }
         }
@@ -1788,7 +1771,7 @@ where
         if self.app.subcommands.is_empty() {
             return false;
         }
-        self.app.subcommands.iter().any(|s| !s.p.is_set(AS::Hidden))
+        self.app.subcommands.iter().any(|s| !s.is_set(AS::Hidden))
     }
 }
 

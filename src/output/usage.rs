@@ -19,21 +19,19 @@ pub fn create_usage_with_title(p: &Parser, used: &[&str]) -> String {
 }
 
 // Creates a usage string to be used in error message (i.e. one with currently used args)
-pub fn create_error_usage<'a, 'b>(
-    p: &Parser<'a, 'b>,
-    matcher: &'b ArgMatcher<'a>,
+pub fn create_error_usage(
+    p: &Parser,
+    matcher: &ArgMatcher,
     extra: Option<&str>,
 ) -> String {
     let mut args: Vec<_> = matcher
         .arg_names()
         .iter()
         .filter(|n| {
-            if let Some(o) = find_by_name!(p, **n, opts, iter) {
-                !o.is_set(ArgSettings::Required) && !o.is_set(ArgSettings::Hidden)
-            } else if let Some(p) = find_by_name!(p, **n, positionals, values) {
-                !p.is_set(ArgSettings::Required) && p.is_set(ArgSettings::Hidden)
+            if let Some(a) = args!(p.app).find(|a| a.name == **n) {
+                (!a.is_set(ArgSettings::Required) && !a.is_set(ArgSettings::Hidden)) || (a.has_switch() && !a.is_set(ArgSettings::TakesValue))
             } else {
-                true // flags can't be required, so they're always true
+                false
             }
         })
         .map(|&n| n)
@@ -415,9 +413,9 @@ pub fn get_required_usage_from<'a, 'b>(
     let pmap = if let Some(m) = matcher {
         desc_reqs
             .iter()
-            .filter(|a| p.positionals.values().any(|p| &&p.name == a))
+            .filter(|a| positionals!(p).any(|p| &&p.name == a))
             .filter(|&pos| !m.contains(pos))
-            .filter_map(|pos| p.positionals.values().find(|x| &x.name == pos))
+            .filter_map(|pos| positionals!(p).find(|x| &x.name == pos))
             .filter(|&pos| incl_last || !pos.is_set(ArgSettings::Last))
             .filter(|pos| !args_in_groups.contains(&pos.name))
             .map(|pos| (pos.index, pos))
@@ -425,8 +423,8 @@ pub fn get_required_usage_from<'a, 'b>(
     } else {
         desc_reqs
             .iter()
-            .filter(|a| p.positionals.values().any(|pos| &&pos.name == a))
-            .filter_map(|pos| p.positionals.values().find(|x| &x.name == pos))
+            .filter(|a| positionals!(p).any(|pos| &&pos.name == a))
+            .filter_map(|pos| positionals!(p).find(|x| &x.name == pos))
             .filter(|&pos| incl_last || !pos.is_set(ArgSettings::Last))
             .filter(|pos| !args_in_groups.contains(&pos.name))
             .map(|pos| (pos.index, pos))
@@ -444,7 +442,7 @@ pub fn get_required_usage_from<'a, 'b>(
     }
     for a in desc_reqs
         .iter()
-        .filter(|name| !p.positionals.values().any(|p| &&p.name == name))
+        .filter(|name| !positionals!(p).any(|p| &&p.name == name))
         .filter(|name| !p.groups.iter().any(|g| &&g.name == name))
         .filter(|name| !args_in_groups.contains(name))
         .filter(|name| {
@@ -452,13 +450,9 @@ pub fn get_required_usage_from<'a, 'b>(
         })
     {
         debugln!("usage::get_required_usage_from:iter:{}:", a);
-        let arg = find_by_name!(p, *a, flags, iter)
+        let arg = args!(p).find(|arg| arg.name == *a)
             .map(|f| f.to_string())
-            .unwrap_or_else(|| {
-                find_by_name!(p, *a, opts, iter)
-                    .map(|o| o.to_string())
-                    .expect(INTERNAL_ERROR_MSG)
-            });
+            .expect(INTERNAL_ERROR_MSG);
         ret_val.push_back(arg);
     }
     let mut g_vec: Vec<String> = vec![];
