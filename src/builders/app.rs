@@ -61,7 +61,7 @@ pub enum Shell {
 /// // Your program logic starts here...
 /// ```
 /// [`App::get_matches`]: ./struct.App.html#method.get_matches
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(default))]
 pub struct App<'a, 'b>
@@ -1871,4 +1871,38 @@ impl<'n, 'e> AnyArg<'n, 'e> for App<'n, 'e> {
 
 impl<'n, 'e> fmt::Display for App<'n, 'e> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "{}", self.p.meta.name) }
+}
+
+impl<'n, 'e> Default for App<'n, 'e> {
+    fn default() -> Self {
+        App {
+            name: String::new(),
+            bin_name: None,
+            author: None,
+            version: None,
+            about: None,
+            long_about: None,
+            after_help: None,
+            before_help: None,
+            override_usage: None,
+            override_help: None,
+            aliases: None,
+            visible_aliases: None,
+            display_order: 999,
+            term_witdth: None,
+            max_term_width: None,
+            help_template: None,
+            args: Vec::new(),
+            global_args: Vec::new(),
+            subcommands: Vec::new(),
+            groups: Vec::new(),
+            settings: Vec::new(),
+            global_settings: Vec::new(),
+            help_short: None,
+            version_short: None,
+            help_message: None,
+            version_message: None,
+            long_version: None,
+        }
+    }
 }

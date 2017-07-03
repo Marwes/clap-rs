@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::iter::Chain;
-use std::fmt::{self, Formatter, Display};
+use std::fmt::{self, Formatter, Display, Debug, Error};
 use std::result::Result as StdResult;
 use std::rc::Rc;
 use std::ffi::{OsString, OsStr};
@@ -65,19 +65,19 @@ where
     #[doc(hidden)]
     pub long_help: Option<&'b str>,
     #[doc(hidden)]
-    pub conflicts: Option<Vec<&'a str>>,
+    pub conflicts_with: Option<Vec<&'a str>>,
     #[doc(hidden)]
     pub settings: Vec<ArgSettings>,
     #[doc(hidden)]
     pub required_unless: Option<Vec<&'a str>>,
     #[doc(hidden)]
-    pub overrides: Option<Vec<&'a str>>,
+    pub overrides_with: Option<Vec<&'a str>>,
     #[doc(hidden)]
     pub groups: Option<Vec<&'a str>>,
     #[doc(hidden)]
     pub requires: Option<Vec<&'a str>>,
     #[doc(hidden)]
-    pub requires_if: Option<Vec<(&'a str, Option<&'b str>)>>,
+    pub requires_ifs: Option<Vec<(&'a str, Option<&'b str>)>>,
     #[doc(hidden)]
     pub short: Option<char>,
     #[doc(hidden)]
@@ -2751,8 +2751,8 @@ impl<'n, 'e> AnyArg<'n, 'e> for Arg<'n, 'e> {
     fn _is_set(&self, s: ArgSettings) -> bool { self._settings.is_set(s) }
     fn _set(&mut self, s: ArgSettings) { self._settings.set(s) }
     fn has_switch(&self) -> bool { self.short.is_some() || self.long.is_some() }
-    fn max_vals(&self) -> Option<u64> { self.max_vals }
-    fn val_terminator(&self) -> Option<&'e str> { self.terminator }
+    fn max_vals(&self) -> Option<u64> { self.max_values }
+    fn val_terminator(&self) -> Option<&'e str> { self.value_terminator }
     fn num_vals(&self) -> Option<u64> { self.number_of_values }
     fn possible_vals(&self) -> Option<&[&'e str]> { self.possible_values.as_ref().map(|o| &o[..]) }
     fn validator(&self) -> Option<&Rc<Fn(String) -> StdResult<(), String>>> {
@@ -2770,7 +2770,7 @@ impl<'n, 'e> AnyArg<'n, 'e> for Arg<'n, 'e> {
     fn long_help(&self) -> Option<&'e str> { self.long_help }
     fn default_val(&self) -> Option<&'e OsStr> { self.default_value }
     fn default_vals_ifs(&self) -> Option<vec_map::Values<(&'n str, Option<&'e OsStr>, &'e OsStr)>> {
-        self.default_values_ifs.as_ref().map(|vm| vm.values())
+        self.default_value_ifs.as_ref().map(|vm| vm.values())
     }
     fn longest_filter(&self) -> bool { self._is_set(ArgSettings::TakesValue) && self.has_switch() }
     fn aliases(&self) -> Option<Chain<&'e str, &'e str>> {
@@ -2798,7 +2798,7 @@ impl<'n, 'e> Display for Arg<'n, 'e> {
                     try!(write!(f, "<{}>", self.name));
                 }
                 if self.settings.is_set(ArgSettings::Multiple) &&
-                    (self.val_names.is_none() || self.val_names.as_ref().unwrap().len() == 1)
+                    (self.value_names.is_none() || self.value_names.as_ref().unwrap().len() == 1)
                 {
                     try!(write!(f, "..."));
                 }
@@ -2818,7 +2818,7 @@ impl<'n, 'e> Display for Arg<'n, 'e> {
                 }
 
                 // Write the values such as <name1> <name2>
-                if let Some(ref vec) = self.val_names {
+                if let Some(ref vec) = self.value_names {
                     let mut it = vec.iter().peekable();
                     while let Some((_, val)) = it.next() {
                         try!(write!(f, "<{}>", val));
@@ -2830,7 +2830,7 @@ impl<'n, 'e> Display for Arg<'n, 'e> {
                     if self.is_set(ArgSettings::Multiple) && num == 1 {
                         try!(write!(f, "..."));
                     }
-                } else if let Some(num) = self.num_vals {
+                } else if let Some(num) = self.number_of_values {
                     let mut it = (0..num).peekable();
                     while let Some(_) = it.next() {
                         try!(write!(f, "<{}>", self.name));
@@ -3000,5 +3000,72 @@ mod test {
         p2.value_names = Some(vm);
 
         assert_eq!(&*format!("{}", p2), "<file1> <file2>");
+    }
+}
+
+impl<'n, 'e> fmt::Debug for Arg<'n, 'e> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        write!(f, "Arg {{ name: {:?}, help: {:?}, long_help: {:?}, conflicts_with: {:?}, \
+            settings: {:?}, required_unless: {:?}, overrides_with: {:?}, groups: {:?}, \
+            requires: {:?}, requires_ifs: {:?}, short: {:?}, index: {:?}, long: {:?}, \
+            aliases: {:?}, visible_aliases: {:?}, possible_values: {:?}, value_names: {:?}, \
+            number_of_values: {:?}, max_values: {:?}, min_values: {:?}, value_delimiter: {:?}, \
+            default_value_ifs: {:?}, value_terminator: {:?}, display_order: {:?}, validator: {}, \
+            validator_os: {} \
+        }}", 
+            self.name,
+            self.help,
+            self.long_help,
+            self.conflicts_with,
+            self.settings,
+            self.required_unless,
+            self.overrides_with,
+            self.groups,
+            self.requires,
+            self.requires_ifs,
+            self.short,
+            self.index,
+            self.long,
+            self.aliases,
+            self.visible_aliases,
+            self.possible_values,
+            self.value_names,
+            self.number_of_values,
+            self.max_values,
+            self.min_values,
+            self.value_delimiter,
+            self.default_value_ifs,
+            self.value_terminator,
+            self.display_order,
+            self.validator.map_or("None", |_| "Some(Fn)"),
+            self.validator_os.map_or("None", |_| "Some(Fn)")
+    // name: {:?},
+    // help: Option<&'b str>,
+    // long_help: Option<&'b str>,
+    // conflicts: Option<Vec<&'a str>>,
+    // settings: Vec<ArgSettings>,
+    // required_unless: Option<Vec<&'a str>>,
+    // overrides: Option<Vec<&'a str>>,
+    // groups: Option<Vec<&'a str>>,
+    // requires: Option<Vec<&'a str>>,
+    // requires_if: Option<Vec<(&'a str, Option<&'b str>)>>,
+    // short: Option<char>,
+    // index: Option<usize>,
+    // long: Option<&'b str>,
+    // aliases: Option<Vec<&'b str>>,
+    // visible_aliases: Option<Vec<&'b str>>,
+    // possible_values: Option<Vec<&'b str>>,
+    // value_names: Option<VecMap<&'b str>>,
+    // number_of_values: Option<u64>,
+    // max_values: Option<u64>,
+    // min_values: Option<u64>,
+    // value_delimiter: Option<char>,
+    // default_value_ifs: Option<VecMap<(&'a str, Option<&'b OsStr>, &'b OsStr)>>,
+    // value_terminator: Option<&'b str>,
+    // display_order: usize,
+    // validator: Option<Rc<Fn(String) -> StdResult<(), String>>>,
+    // validator_os: Option<Rc<Fn(&OsStr) -> StdResult<(), OsString>>>,
+    // _settings: ArgFlags,
+        )
     }
 }
