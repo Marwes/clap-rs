@@ -42,12 +42,12 @@ pub enum ParseResult<'a> {
 
 #[allow(missing_debug_implementations)]
 #[doc(hidden)]
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub struct Parser<'a, 'b>
 where
     'a: 'b,
 {
-    pub app: &'b mut App<'a, 'b>,
+    pub app: App<'a, 'b>,
     settings: AppFlags,
     pub g_settings: AppFlags,
     pub positionals: VecMap<&'a str>,
@@ -62,11 +62,10 @@ impl<'a, 'b> Parser<'a, 'b>
 where
     'a: 'b,
 {
-    fn new(app: Cow<'b, App>, appx_groups: usize) -> Self {
+    fn new(app:  App<'a, 'b>) -> Self {
         Parser {
             app: app,
             positionals: VecMap::new(),
-            groups: Vec::with_capacity(appx_groups),
             ..Default::default()
         }
     }
@@ -100,7 +99,7 @@ where
 
     #[inline]
     fn add_conditional_reqs(&mut self, a: &Arg<'a, 'b>) {
-        if let Some(ref req_ifs) = a.req_ifs {
+        if let Some(ref req_ifs) = a.required_ifs {
             for &(arg, val) in req_ifs {
                 self.req_ifs.push((arg, val, a.name));
             }

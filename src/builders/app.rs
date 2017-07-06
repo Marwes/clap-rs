@@ -30,7 +30,7 @@ pub enum Shell {
     Powershell,
     Bash,
     Zsh,
-    Fish
+    Fish,
 }
 
 /// Used to create a representation of a command line program and all possible command line
@@ -61,7 +61,7 @@ pub enum Shell {
 /// // Your program logic starts here...
 /// ```
 /// [`App::get_matches`]: ./struct.App.html#method.get_matches
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(default))]
 pub struct App<'a, 'b>
@@ -95,7 +95,7 @@ where
     #[doc(hidden)]
     pub display_order: usize,
     #[doc(hidden)]
-    pub term_witdth: Option<usize>,
+    pub term_width: Option<usize>,
     #[doc(hidden)]
     pub max_term_width: Option<usize>,
     #[doc(hidden)]
@@ -142,7 +142,8 @@ impl<'a, 'b> App<'a, 'b> {
     /// let prog = App::new("My Program")
     /// # ;
     /// ```
-    pub fn new<S: Into<String>>(n: S) -> Self { App { name: n.into()..Default::default() } }
+    pub fn new<S: Into<String>>(n: S) -> Self { App { name: n.into(), ..Default::default() }
+    }
 
     /// Sets the program's name. This will be displayed when displaying help information.
     ///
@@ -601,7 +602,7 @@ impl<'a, 'b> App<'a, 'b> {
     pub fn unset_all(mut self, settings: &[AppSettings]) -> Self {
         for s in settings {
             'start: for i in (0..self.settings.len()).rev() {
-                let should_remove = self.settings[i] == s;
+                let should_remove = &self.settings[i] == s;
                 if should_remove {
                     self.settings.swap_remove(i);
                     break 'start;
@@ -722,13 +723,11 @@ impl<'a, 'b> App<'a, 'b> {
     /// Panics if `arg` doesn't exist
     pub fn mut_arg<F>(mut self, arg: &str, f: F) -> Self
     where
-        F: Fn(Arg<'a, 'b>) -> Arg<'a, 'b>,
+        F: Fn(&mut Arg<'a, 'b>) -> Arg<'a, 'b>,
     {
-        let a = self.args.find_mut(|a| a.name == arg).unwrap_or(
-            self.global_args
-                .find(|a| a.name == arg)
-                .unwrap(),
-        );
+        let a = self.args.iter_mut()
+            .find(|a| a.name == arg)
+            .unwrap_or(self.global_args.iter_mut().find(|a| a.name == arg).unwrap());
         self.args.push(f(a));
         self
     }
@@ -864,9 +863,9 @@ impl<'a, 'b> App<'a, 'b> {
     /// Panics if `group` doesn't exist
     pub fn mut_group<F>(mut self, group: &str, f: F) -> Self
     where
-        F: Fn(ArgGroup<'a>) -> ArgGroup<'a>,
+        F: Fn(&mut ArgGroup<'a>) -> ArgGroup<'a>,
     {
-        let g = self.groups.find_mut(|g| g.name == group).unwrap();
+        let g = self.groups.iter_mut().find(|g| g.name == group).unwrap();
         self.groups.push(f(g));
         self
     }
@@ -897,7 +896,7 @@ impl<'a, 'b> App<'a, 'b> {
     /// [`ArgGroup`]: ./struct.ArgGroup.html
     /// [`App`]: ./struct.App.html
     pub fn groups(mut self, groups: &[ArgGroup<'a>]) -> Self {
-        self.groups.extend(groups);
+        self.groups.extend_from_slice(groups);
         self
     }
 
@@ -953,9 +952,9 @@ impl<'a, 'b> App<'a, 'b> {
     /// Panics if `subcommand` doesn't exist
     pub fn mut_subcommand<F>(mut self, subcommand: &str, f: F) -> Self
     where
-        F: Fn(App<'a, 'b>) -> App<'a, 'b>,
+        F: Fn(&mut App<'a, 'b>) -> App<'a, 'b>,
     {
-        let s = self.subcommands.find_mut(|s| s.name == subcommand).unwrap();
+        let s = self.subcommands.iter_mut().find(|s| s.name == subcommand).unwrap();
         self.subcommands.push(f(s));
         self
     }
@@ -1008,7 +1007,7 @@ impl<'a, 'b> App<'a, 'b> {
     /// ```
     /// [`SubCommand`]: ./struct.SubCommand.html
     pub fn display_order(mut self, ord: usize) -> Self {
-        self.p.meta.disp_ord = ord;
+        self.display_order = ord;
         self
     }
 
@@ -1035,14 +1034,14 @@ impl<'a, 'b> App<'a, 'b> {
 
         // If there are global arguments, or settings we need to propgate them down to subcommands
         // before parsing incase we run into a subcommand
-        self.p.propogate_globals();
-        self.p.propogate_settings();
-        self.p.derive_display_order();
+        // self.p.propogate_globals();
+        // self.p.propogate_settings();
+        // self.p.derive_display_order();
 
-        self.p.create_help_and_version();
-        let out = io::stdout();
-        let mut buf_w = BufWriter::new(out.lock());
-        self.write_help(&mut buf_w)
+        // self.p.create_help_and_version();
+        // let out = io::stdout();
+        // let mut buf_w = BufWriter::new(out.lock());
+        // self.write_help(&mut buf_w)
     }
 
     /// Prints the full help message to [`io::stdout()`] using a [`BufWriter`] using the same
@@ -1068,14 +1067,14 @@ impl<'a, 'b> App<'a, 'b> {
 
         // If there are global arguments, or settings we need to propgate them down to subcommands
         // before parsing incase we run into a subcommand
-        self.p.propogate_globals();
-        self.p.propogate_settings();
-        self.p.derive_display_order();
+        // self.p.propogate_globals();
+        // self.p.propogate_settings();
+        // self.p.derive_display_order();
 
-        self.p.create_help_and_version();
-        let out = io::stdout();
-        let mut buf_w = BufWriter::new(out.lock());
-        self.write_long_help(&mut buf_w)
+        // self.p.create_help_and_version();
+        // let out = io::stdout();
+        // let mut buf_w = BufWriter::new(out.lock());
+        // self.write_long_help(&mut buf_w)
     }
 
     /// Writes the full help message to the user to a [`io::Write`] object in the same method as if
@@ -1106,12 +1105,12 @@ impl<'a, 'b> App<'a, 'b> {
 
         // If there are global arguments, or settings we need to propgate them down to subcommands
         // before parsing incase we run into a subcommand
-        self.p.propogate_globals();
-        self.p.propogate_settings();
-        self.p.derive_display_order();
-        self.p.create_help_and_version();
+        // self.p.propogate_globals();
+        // self.p.propogate_settings();
+        // self.p.derive_display_order();
+        // self.p.create_help_and_version();
 
-        Help::write_app_help(w, self, false)
+        // Help::write_app_help(w, self, false)
     }
 
     /// Writes the full help message to the user to a [`io::Write`] object in the same method as if
@@ -1136,12 +1135,12 @@ impl<'a, 'b> App<'a, 'b> {
         // TODO-v3-beta: do some sort of app::build().print()
         unimplemented!();
 
-        self.p.propogate_globals();
-        self.p.propogate_settings();
-        self.p.derive_display_order();
-        self.p.create_help_and_version();
+        // self.p.propogate_globals();
+        // self.p.propogate_settings();
+        // self.p.derive_display_order();
+        // self.p.create_help_and_version();
 
-        Help::write_app_help(w, self, true)
+        // Help::write_app_help(w, self, true)
     }
 
     /// Writes the version message to the user to a [`io::Write`] object as if the user ran `-V`.
@@ -1165,7 +1164,7 @@ impl<'a, 'b> App<'a, 'b> {
         // TODO-v3-beta: do some sort of app::build().print()
         unimplemented!();
 
-        self.p.write_version(w, false).map_err(From::from)
+        // self.p.write_version(w, false).map_err(From::from)
     }
 
     /// Writes the version message to the user to a [`io::Write`] object
@@ -1189,7 +1188,7 @@ impl<'a, 'b> App<'a, 'b> {
         // TODO-v3-beta: do some sort of app::build().print()
         unimplemented!();
 
-        self.p.write_version(w, true).map_err(From::from)
+        // self.p.write_version(w, true).map_err(From::from)
     }
 
     /// Starts the parsing process, upon a failed parse an error will be displayed to the user and
@@ -1278,8 +1277,8 @@ impl<'a, 'b> App<'a, 'b> {
             // Otherwise, write to stderr and exit
             if e.use_stderr() {
                 wlnerr!("{}", e.message);
-                if self.settings.contains(AppSettings::WaitOnError) ||
-                    self.global_settings.contains(AppSettings::WaitOnError)
+                if self.settings.contains(&AppSettings::WaitOnError) ||
+                    self.global_settings.contains(&AppSettings::WaitOnError)
                 {
                     wlnerr!("\nPress [ENTER] / [RETURN] to continue...");
                     let mut s = String::new();
@@ -1307,8 +1306,8 @@ impl<'a, 'b> App<'a, 'b> {
             // Otherwise, write to stderr and exit
             if e.use_stderr() {
                 wlnerr!("{}", e.message);
-                if self.settings.contains(AppSettings::WaitOnError) ||
-                    self.global_settings.contains(AppSettings::WaitOnError)
+                if self.settings.contains(&AppSettings::WaitOnError) ||
+                    self.global_settings.contains(&AppSettings::WaitOnError)
                 {
                     wlnerr!("\nPress [ENTER] / [RETURN] to continue...");
                     let mut s = String::new();
@@ -1367,8 +1366,8 @@ impl<'a, 'b> App<'a, 'b> {
         // that was used to execute the program. This is because a program called
         // ./target/release/my_prog -a will have two arguments, './target/release/my_prog', '-a'
         // but we don't want to display the full path when displaying help messages and such
-        if !(self.settings.contains(AppSettings::NoBinaryName) ||
-                 self.settings.contains(AppSettings::NoBinaryName)) &&
+        if !(self.settings.contains(&AppSettings::NoBinaryName) ||
+                 self.settings.contains(&AppSettings::NoBinaryName)) &&
             self.get_bin_name().is_none()
         {
             if let Some(name) = it.next() {
@@ -1430,8 +1429,8 @@ impl<'a, 'b> App<'a, 'b> {
         // that was used to execute the program. This is because a program called
         // ./target/release/my_prog -a will have two arguments, './target/release/my_prog', '-a'
         // but we don't want to display the full path when displaying help messages and such
-        if !(self.settings.contains(AppSettings::NoBinaryName) ||
-                 self.settings.contains(AppSettings::NoBinaryName)) &&
+        if !(self.settings.contains(&AppSettings::NoBinaryName) ||
+                 self.settings.contains(&AppSettings::NoBinaryName)) &&
             self.get_bin_name().is_none()
         {
             if let Some(name) = it.next() {
@@ -1473,7 +1472,7 @@ impl<'a, 'b> App<'a, 'b> {
         I: IntoIterator<Item = T>,
         T: Into<OsString> + Clone,
     {
-        self.get_matches_from_safe_ref(itr)
+        self.get_matches_from_safe_mut(itr)
     }
 
     /// Deprecated
@@ -1484,7 +1483,7 @@ impl<'a, 'b> App<'a, 'b> {
     /// Deprecated
     #[deprecated(since = "2.24.1", note = "Use App::override_help instead")]
     pub fn help<S: Into<&'b str>>(mut self, help: S) -> Self {
-        self.p.meta.help_str = Some(help.into());
+        self.override_help = Some(help.into());
         self
     }
 
@@ -1492,7 +1491,7 @@ impl<'a, 'b> App<'a, 'b> {
     #[deprecated(since = "2.24.1",
                  note = "Use App::mut_arg(\"help\", |arg| arg.short(\"H\")) instead")]
     pub fn help_short<S: AsRef<str> + 'b>(mut self, s: S) -> Self {
-        let c = s.trim_left_matches(|c| c == '-')
+        let c = s.as_ref().trim_left_matches(|c| c == '-')
             .chars()
             .nth(0)
             .unwrap_or('h');
@@ -1504,7 +1503,7 @@ impl<'a, 'b> App<'a, 'b> {
     #[deprecated(since = "2.24.1",
                  note = "Use App::mut_arg(\"version\", |arg| arg.short(\"v\")) instead")]
     pub fn version_short<S: AsRef<str>>(mut self, s: S) -> Self {
-        let c = s.trim_left_matches(|c| c == '-')
+        let c = s.as_ref().trim_left_matches(|c| c == '-')
             .chars()
             .nth(0)
             .unwrap_or('V');
@@ -1516,7 +1515,7 @@ impl<'a, 'b> App<'a, 'b> {
     #[deprecated(since = "2.24.1",
                  note = "Use App::mut_arg(\"help\", |arg| arg.help(\"Some message\")) instead")]
     pub fn help_message<S: Into<&'a str>>(mut self, s: S) -> Self {
-        self.p.help_message = Some(s.into());
+        self.help_message = Some(s.into());
         self
     }
 
@@ -1524,21 +1523,21 @@ impl<'a, 'b> App<'a, 'b> {
     #[deprecated(since = "2.24.1",
                  note = "Use App::mut_arg(\"version\", |arg| arg.short(\"Some message\")) instead")]
     pub fn version_message<S: Into<&'a str>>(mut self, s: S) -> Self {
-        self.p.version_message = Some(s.into());
+        self.version_message = Some(s.into());
         self
     }
 
     /// Deprecated
     #[deprecated(since = "2.24.1", note = "Use App::override_usage instead")]
     pub fn usage<S: Into<&'b str>>(mut self, usage: S) -> Self {
-        self.p.meta.usage_str = Some(usage.into());
+        self.override_usage = Some(usage.into());
         self
     }
 
     /// Deprecated
     #[deprecated(since = "2.24.1", note = "Use App::arg(\"-a, --all 'some message'\") instead")]
     pub fn arg_from_usage(mut self, usage: &'a str) -> Self {
-        self.p.add_arg(Arg::from_usage(usage));
+        self.arg(Arg::from_usage(usage));
         self
     }
 
@@ -1551,7 +1550,7 @@ impl<'a, 'b> App<'a, 'b> {
             if l.is_empty() {
                 continue;
             }
-            self.p.add_arg(Arg::from_usage(l));
+            self.arg(Arg::from_usage(l));
         }
         self
     }
@@ -1598,7 +1597,7 @@ impl<'a, 'b> App<'a, 'b> {
     pub fn unset_settings(mut self, settings: &[AppSettings]) -> Self {
         for s in settings {
             'start: for i in (0..self.settings.len()).rev() {
-                let should_remove = self.settings[i] == s;
+                let should_remove = &self.settings[i] == s;
                 if should_remove {
                     self.settings.swap_remove(i);
                     break 'start;
@@ -1857,8 +1856,8 @@ impl<'n, 'e> AnyArg<'n, 'e> for App<'n, 'e> {
     fn long(&self) -> Option<&'e str> { None }
     fn val_delim(&self) -> Option<char> { None }
     fn takes_value(&self) -> bool { true }
-    fn help(&self) -> Option<&'e str> { self.p.meta.about }
-    fn long_help(&self) -> Option<&'e str> { self.p.meta.long_about }
+    fn help(&self) -> Option<&'e str> { self.about }
+    fn long_help(&self) -> Option<&'e str> { self.long_about }
     fn default_val(&self) -> Option<&'e OsStr> { None }
     fn default_vals_ifs(&self) -> Option<vec_map::Values<(&'n str, Option<&'e OsStr>, &'e OsStr)>> {
         None
@@ -1870,39 +1869,40 @@ impl<'n, 'e> AnyArg<'n, 'e> for App<'n, 'e> {
 }
 
 impl<'n, 'e> fmt::Display for App<'n, 'e> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "{}", self.p.meta.name) }
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "{}", self.name) }
 }
 
-impl<'n, 'e> Default for App<'n, 'e> {
-    fn default() -> Self {
-        App {
-            name: String::new(),
-            bin_name: None,
-            author: None,
-            version: None,
-            about: None,
-            long_about: None,
-            after_help: None,
-            before_help: None,
-            override_usage: None,
-            override_help: None,
-            aliases: None,
-            visible_aliases: None,
-            display_order: 999,
-            term_witdth: None,
-            max_term_width: None,
-            help_template: None,
-            args: Vec::new(),
-            global_args: Vec::new(),
-            subcommands: Vec::new(),
-            groups: Vec::new(),
-            settings: Vec::new(),
-            global_settings: Vec::new(),
-            help_short: None,
-            version_short: None,
-            help_message: None,
-            version_message: None,
-            long_version: None,
-        }
-    }
-}
+// impl<'n, 'e> Default for App<'n, 'e> {
+//     fn default() -> Self {
+//         App {
+//             name: String::new(),
+//             bin_name: None,
+//             author: None,
+//             version: None,
+//             about: None,
+//             long_about: None,
+//             after_help: None,
+//             before_help: None,
+//             override_usage: None,
+//             override_help: None,
+//             aliases: None,
+//             visible_aliases: None,
+//             display_order: 999,
+//             term_width: None,
+//             max_term_width: None,
+//             help_template: None,
+//             args: Vec::new(),
+//             global_args: Vec::new(),
+//             subcommands: Vec::new(),
+//             groups: Vec::new(),
+//             settings: Vec::new(),
+//             global_settings: Vec::new(),
+//             help_short: None,
+//             version_short: None,
+//             help_message: None,
+//             version_message: None,
+//             long_version: None,
+//         }
+//     }
+// }
+
